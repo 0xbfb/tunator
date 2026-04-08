@@ -163,3 +163,19 @@ API disponível em `http://127.0.0.1:8000`.
 - **Porta em uso**: ajuste `SOCKSPort`/`ControlPort` no `torrc` pela interface.
 - **`.onion` não aparece**: confira permissões de escrita em `backend/vendor/tor/state/onions`.
 - **UI não carrega**: verifique se o backend está em execução e sem erro no terminal.
+
+
+## Novidades de confiabilidade (v0.4)
+
+- Runtime do Tor com estado persistido (SQLite + pid/state files), lock de ações e snapshots de eventos.
+- `/api/status` enriquecido com ControlPort (Stem), bootstrap progress e metadados de gerenciamento.
+- Configuração com preview diff (`/api/config/preview`), escrita atômica, backups listáveis e restore.
+- Logs estruturados (`raw`, `level`, `message`, `timestamp`) com leitura tail eficiente.
+- Frontend modular em views/composables/services e sem Google Fonts remota.
+
+### Endpoints novos
+
+- `POST /api/config/preview`
+- `GET /api/config/backups`
+- `POST /api/config/backups/restore`
+- `GET /api/config/history`

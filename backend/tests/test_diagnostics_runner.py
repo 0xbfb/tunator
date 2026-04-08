@@ -39,3 +39,4 @@ def test_diagnostics_include_runtime_support_flag(tmp_path: Path) -> None:
     assert "runtime_platform_supported" in names
     assert "tor_binary_detected" in names
     assert "service_running" in names
+    assert any(getattr(check, "recommendation", None) for check in result.checks)

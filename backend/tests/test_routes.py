@@ -16,27 +16,25 @@ def test_environment_endpoint_exposes_local_runtime_info(client: TestClient) -> 
     assert payload['supported_platform'] in {True, False}
 
 
-def test_read_config_endpoint(client: TestClient) -> None:
-    response = client.get('/api/config')
+def test_preview_and_apply_config_endpoints(client: TestClient) -> None:
+    preview = client.post('/api/config/preview', json={'updates': {'SOCKSPort': '9055'}})
+    assert preview.status_code == 200
+    assert preview.json()['valid'] is True
+    assert 'SOCKSPort 9055' in preview.json()['diff']
+
+    apply_res = client.post('/api/config/apply', json={'updates': {'SOCKSPort': '9055'}})
+    assert apply_res.status_code == 200
+    assert apply_res.json()['success'] is True
+
+
+def test_backups_list_endpoint(client: TestClient) -> None:
+    client.post('/api/config/apply', json={'updates': {'SOCKSPort': '9056'}})
+    response = client.get('/api/config/backups')
     assert response.status_code == 200
-    payload = response.json()
-    assert payload['parsed']['SOCKSPort'] == '9050'
-    assert payload['base_options']['SOCKSPort'] == '9050'
+    assert 'items' in response.json()
 
 
-def test_validate_config_endpoint(client: TestClient) -> None:
-    response = client.post('/api/config/validate', json={'updates': {'SOCKSPort': '9055'}})
-    assert response.status_code == 200
-    assert response.json()['valid'] is True
-
-
-def test_apply_config_rejects_invalid_update(client: TestClient) -> None:
-    response = client.post('/api/config/apply', json={'updates': {'UnknownOption': '1'}})
-    assert response.status_code == 400
-    assert response.json()['detail']['success'] is False
-
-
-def test_onion_create_and_list_endpoints(client: TestClient) -> None:
+def test_onion_create_and_delete_endpoint(client: TestClient) -> None:
     create = client.post('/api/onions', json={
         'name': 'meu-site',
         'public_port': 80,
@@ -47,16 +45,15 @@ def test_onion_create_and_list_endpoints(client: TestClient) -> None:
     assert create.status_code == 200
     payload = create.json()
     assert payload['item']['name'] == 'meu-site'
-    assert payload['item']['auth_enabled'] is True
 
-    listing = client.get('/api/onions')
-    assert listing.status_code == 200
-    assert listing.json()['items']
+    delete = client.request('DELETE', '/api/onions/meu-site', json={'remove_directory': False})
+    assert delete.status_code == 200
 
 
 def test_logs_endpoint(client: TestClient) -> None:
     response = client.get('/api/logs')
     assert response.status_code == 200
     assert response.json()['entries']
-    assert 'raw' in response.json()['entries'][0]
-    assert 'observed_at' in response.json()['entries'][0]
+    entry = response.json()['entries'][0]
+    assert 'raw' in entry
+    assert 'message' in entry

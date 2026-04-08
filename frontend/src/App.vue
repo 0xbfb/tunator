@@ -1,666 +1,105 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, ref } from 'vue'
+import DashboardView from './views/DashboardView.vue'
+import LogsView from './views/LogsView.vue'
+import BackupsView from './views/BackupsView.vue'
+import { useTunator } from './composables/useTunator'
+import { api } from './services/api'
 
-type DiagnosticsPayload = { run_id?: string | null; checked_at?: string; source?: string; freshness?: string; checks: DiagnosticItem[] }
-type StatusResponse = {
-  running: boolean
-  source: string
-  message: string
-  pid?: number | null
-  run_id?: string | null
-  status?: string
-  phase?: string
-  latest_diagnostics?: DiagnosticsPayload | null
-}
-type EnvironmentResponse = { os_name: string; tor_installed: boolean; tor_source: string; tor_binary_path?: string | null; torrc_path?: string | null; log_path?: string | null; bundle_download_url?: string | null }
-type OnionItem = {
-  name: string
-  directory: string
-  public_port: number
-  target_host: string
-  target_port: number
-  hostname?: string | null
-  hostname_path?: string | null
-  hostname_ready?: boolean
-  auth_enabled?: boolean
-  auth_client_name?: string | null
-}
-type ConfigResponse = { raw: string; base_options: Record<string, string>; onion_services: OnionItem[] }
-type DiagnosticItem = { name: string; ok: boolean; details: string }
-type LogEntry = { raw: string; observed_at: string }
-
-const apiBase = ((import.meta as any).env?.VITE_API_BASE || '').replace(/\/$/, '')
-const loading = ref(false)
-const busyAction = ref('')
-const toast = ref('')
-const environment = ref<EnvironmentResponse | null>(null)
-const status = ref<StatusResponse | null>(null)
-const diagnostics = ref<DiagnosticItem[]>([])
-const diagnosticsMeta = ref<{ run_id?: string | null; checked_at?: string; source?: string; freshness?: string } | null>(null)
-const logs = ref<LogEntry[]>([])
-const rawTorrc = ref('')
-const configForm = reactive({
-  SOCKSPort: '9050',
-  ControlPort: '9051',
-  DataDirectory: '',
-  Log: '',
-  ExcludeNodes: '',
-})
-const onionForm = reactive({
-  name: '',
-  public_port: 80,
-  target_host: '127.0.0.1',
-  target_port: 3000,
-  access_password: '',
-})
-const onions = ref<OnionItem[]>([])
-const countryBlacklistOptions = [{ code: 'ru', label: 'Rússia' }, { code: 'cn', label: 'China' }, { code: 'kp', label: 'Coreia do Norte' }]
-const selectedCountryBlacklist = ref<string[]>([])
-
-const pendingOnions = computed(() => onions.value.filter((item) => !item.hostname_ready))
-const phaseLabel = computed(() => {
-  const phase = status.value?.phase
-  const map: Record<string, string> = {
-    awaiting_initialization: 'Aguardando inicialização',
-    bootstrap_in_progress: 'Bootstrap em andamento',
-    verifying_ports: 'Verificando portas',
-    ready: 'Pronto',
-    failed: 'Falhou',
-    stopping: 'Parando',
-    idle: 'Parado',
-  }
-  return map[phase || ''] || '—'
-})
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${apiBase}${path}`
-  let res: Response
-  try {
-    res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-    })
-  } catch (err: any) {
-    const baseHint = apiBase || window.location.origin
-    throw new Error(`Não consegui alcançar a API em ${baseHint}. Abra a interface pelo mesmo endereço do backend e confirme /health ou /docs.`)
-  }
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    throw new Error(data?.detail?.message || data?.detail?.errors?.join('; ') || data?.message || 'Request failed')
-  }
-  return data as T
-}
-
-async function refreshAll() {
-  loading.value = true
-  try {
-    const [env, st, cfg, logRes] = await Promise.all([
-      api<EnvironmentResponse>('/api/environment'),
-      api<StatusResponse>('/api/status'),
-      api<ConfigResponse>('/api/config'),
-      api<{ entries: LogEntry[] }>('/api/logs?limit=100'),
-    ])
-    environment.value = env
-    status.value = st
-    rawTorrc.value = cfg.raw
-    logs.value = logRes.entries
-    diagnosticsMeta.value = st.latest_diagnostics || null
-    diagnostics.value = st.latest_diagnostics?.checks || diagnostics.value
-    onions.value = cfg.onion_services || []
-    configForm.SOCKSPort = cfg.base_options.SOCKSPort || '9050'
-    configForm.ControlPort = cfg.base_options.ControlPort || '9051'
-    configForm.DataDirectory = cfg.base_options.DataDirectory || ''
-    configForm.Log = cfg.base_options.Log || ''
-    configForm.ExcludeNodes = cfg.base_options.ExcludeNodes || ''
-  } catch (err: any) {
-    toast.value = err.message || String(err)
-  } finally {
-    loading.value = false
-  }
-}
-
-async function refreshHostnamesUntilReady() {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    await refreshAll()
-    if (!pendingOnions.value.length || !status.value?.running) {
-      return
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-  }
-}
-
-async function runDiagnostics() {
-  busyAction.value = 'diagnostics'
-  try {
-    const result = await api<DiagnosticsPayload>('/api/diagnostics/run', { method: 'POST' })
-    diagnostics.value = result.checks
-    diagnosticsMeta.value = result
-    toast.value = 'Diagnóstico atualizado.'
-  } catch (err: any) {
-    toast.value = err.message || String(err)
-  } finally {
-    busyAction.value = ''
-  }
-}
-
-async function serviceAction(action: 'start' | 'stop' | 'restart') {
-  busyAction.value = action
-  try {
-    const result = await api<{ message: string }>(`/api/service/${action}`, { method: 'POST' })
-    toast.value = result.message
-    if (action === 'start' || action === 'restart') {
-      diagnosticsMeta.value = null
-      diagnostics.value = []
-    }
-    await refreshAll()
-    if ((action === 'start' || action === 'restart') && status.value?.running && pendingOnions.value.length) {
-      await refreshHostnamesUntilReady()
-    }
-  } catch (err: any) {
-    toast.value = err.message || String(err)
-  } finally {
-    busyAction.value = ''
-  }
-}
-
-function toggleCountryBlacklist(code: string) {
-  const current = new Set(selectedCountryBlacklist.value)
-  if (current.has(code)) current.delete(code)
-  else current.add(code)
-  selectedCountryBlacklist.value = Array.from(current)
-  configForm.ExcludeNodes = selectedCountryBlacklist.value.map((item) => `{${item}}`).join(',')
-}
-
-function syncCountriesFromExcludeNodes() {
-  const matches = configForm.ExcludeNodes.match(/\{([a-z]{2})\}/gi) || []
-  selectedCountryBlacklist.value = matches.map((item) => item.replace(/[{}]/g, '').toLowerCase())
-}
+const tab = ref<'dashboard'|'config'|'onions'|'logs'|'diagnostics'|'backups'>('dashboard')
+const { loading, busyAction, toast, environment, status, diagnostics, logs, rawTorrc, onions, backups, configForm, refreshAll, action } = useTunator()
+const onionForm = ref({ name: '', public_port: 80, target_host: '127.0.0.1', target_port: 3000, access_password: '' })
 
 async function saveConfig() {
   busyAction.value = 'save-config'
   try {
-    const updates = {
-      SOCKSPort: configForm.SOCKSPort,
-      ControlPort: configForm.ControlPort,
-      DataDirectory: configForm.DataDirectory,
-      Log: configForm.Log,
-      ExcludeNodes: configForm.ExcludeNodes,
-    }
-    const validation = await api<{ valid: boolean; errors: string[]; warnings: string[] }>('/api/config/validate', {
-      method: 'POST',
-      body: JSON.stringify({ updates }),
-    })
-    if (!validation.valid) {
-      toast.value = validation.errors.join('; ')
-      return
-    }
-    const result = await api<{ warnings?: string[] }>('/api/config/apply', {
-      method: 'POST',
-      body: JSON.stringify({ updates }),
-    })
+    const updates = { ...configForm }
+    const preview = await api<{valid:boolean;errors:string[];diff:string}>('/api/config/preview', { method: 'POST', body: JSON.stringify({ updates }) })
+    if (!preview.valid) throw new Error(preview.errors.join('; '))
+    if (preview.diff && !window.confirm(`Aplicar mudanças no torrc?\n\n${preview.diff.split('\n').slice(0, 20).join('\n')}`)) return
+    const result = await api<{warnings?: string[]}>('/api/config/apply', { method: 'POST', body: JSON.stringify({ updates }) })
     toast.value = result.warnings?.length ? result.warnings.join('; ') : 'torrc atualizado.'
     await refreshAll()
-  } catch (err: any) {
-    toast.value = err.message || String(err)
-  } finally {
-    busyAction.value = ''
-  }
+  } catch (err:any) { toast.value = err.message || String(err) }
+  finally { busyAction.value = '' }
 }
 
 async function createOnion() {
   busyAction.value = 'create-onion'
   try {
-    const result = await api<{ item: OnionItem; warnings?: string[] }>('/api/onions', {
-      method: 'POST',
-      body: JSON.stringify(onionForm),
-    })
-    toast.value = result.warnings?.length ? result.warnings.join('; ') : `Onion ${result.item.name} criado.`
-    onionForm.name = ''
-    onionForm.access_password = ''
+    await api('/api/onions', { method: 'POST', body: JSON.stringify(onionForm.value) })
+    toast.value = 'Onion criado.'
+    onionForm.value = { name: '', public_port: 80, target_host: '127.0.0.1', target_port: 3000, access_password: '' }
     await refreshAll()
-  } catch (err: any) {
-    toast.value = err.message || String(err)
-  } finally {
-    busyAction.value = ''
-  }
+  } catch (err:any) { toast.value = err.message || String(err) }
+  finally { busyAction.value = '' }
 }
 
 async function deleteOnion(name: string) {
-  busyAction.value = `delete-${name}`
-  try {
-    await api(`/api/onions/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    toast.value = `Onion ${name} removido do torrc.`
-    await refreshAll()
-  } catch (err: any) {
-    toast.value = err.message || String(err)
-  } finally {
-    busyAction.value = ''
-  }
-}
-
-async function copyText(value: string | null | undefined, label: string) {
-  if (!value) {
-    toast.value = `${label} ainda não disponível.`
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(value)
-    toast.value = `${label} copiado.`
-  } catch {
-    toast.value = `Não consegui copiar ${label.toLowerCase()}.`
-  }
-}
-
-onMounted(async () => {
+  if (!window.confirm(`Remover onion ${name} do torrc?`)) return
+  await api(`/api/onions/${encodeURIComponent(name)}`, { method: 'DELETE' })
   await refreshAll()
-  await runDiagnostics()
-})
+}
+
+function handleToast(message: string) { toast.value = message }
+
+onMounted(refreshAll)
 </script>
 
 <template>
   <main class="page">
-    <header class="hero">
-      <div>
-        <h1 class="title">Tunator</h1>
-        <p class="subtitle">Painel local pra mexer no Tor sem ter que brigar com o torrc na mão.</p>
-      </div>
-      <button class="secondary" @click="refreshAll" :disabled="loading">Atualizar</button>
-    </header>
-
+    <header class="hero row-between"><h1>Tunator</h1><button class="secondary" @click="refreshAll" :disabled="loading">Atualizar</button></header>
     <p v-if="toast" class="toast">{{ toast }}</p>
+    <nav class="tabs">
+      <button v-for="name in ['dashboard','config','onions','logs','diagnostics','backups']" :key="name" class="secondary" @click="tab=name as any">{{ name }}</button>
+    </nav>
 
-    <section class="grid two">
-      <article class="card">
-        <h2>Status</h2>
-        <p><strong>Serviço:</strong> {{ status?.status || (status?.running ? 'running' : 'stopped') }}</p>
-        <p><strong>Fase:</strong> {{ phaseLabel }}</p>
-        <p><strong>Mensagem:</strong> {{ status?.message || '—' }}</p>
-        <p><strong>PID:</strong> {{ status?.pid ?? '—' }}</p>
-        <p><strong>Run ID:</strong> <code>{{ status?.run_id || '—' }}</code></p>
-        <p><strong>Origem:</strong> {{ status?.source || '—' }}</p>
-        <div class="actions">
-          <button @click="serviceAction('start')" :disabled="busyAction !== ''">Iniciar</button>
-          <button class="secondary" @click="serviceAction('restart')" :disabled="busyAction !== ''">Reiniciar</button>
-          <button class="danger" @click="serviceAction('stop')" :disabled="busyAction !== ''">Parar</button>
-        </div>
-      </article>
+    <DashboardView v-if="tab==='dashboard'" :environment="environment" :status="status" :busy-action="busyAction" @action="action" />
 
+    <section v-if="tab==='config'" class="grid two">
       <article class="card">
-        <h2>Ambiente</h2>
-        <p><strong>SO:</strong> {{ environment?.os_name || '—' }}</p>
-        <p><strong>Origem do Tor:</strong> {{ environment?.tor_source || '—' }}</p>
-        <p><strong>Binário:</strong> <code>{{ environment?.tor_binary_path || 'não encontrado' }}</code></p>
-        <p><strong>torrc:</strong> <code>{{ environment?.torrc_path || '—' }}</code></p>
-        <p><strong>Logs:</strong> <code>{{ environment?.log_path || '—' }}</code></p>
-      </article>
-    </section>
-
-    <section class="grid two stack-mobile">
-      <article class="card">
-        <h2>Configuração base do torrc</h2>
+        <h2>Configuração</h2>
         <label>SOCKSPort <input v-model="configForm.SOCKSPort" /></label>
         <label>ControlPort <input v-model="configForm.ControlPort" /></label>
         <label>DataDirectory <input v-model="configForm.DataDirectory" /></label>
         <label>Log <input v-model="configForm.Log" /></label>
-        <div class="country-blacklist">
-          <span>Blacklist de países</span>
-          <div class="country-chips">
-            <button
-              v-for="option in countryBlacklistOptions"
-              :key="option.code"
-              type="button"
-              class="secondary chip"
-              :class="{ active: selectedCountryBlacklist.includes(option.code) }"
-              @click="toggleCountryBlacklist(option.code)"
-            >
-              {{ option.label }} ({{ option.code.toUpperCase() }})
-            </button>
-          </div>
-        </div>
-        <label>ExcludeNodes (avançado) <input v-model="configForm.ExcludeNodes" placeholder="{ru},{cn},{kp}" @blur="syncCountriesFromExcludeNodes" /></label>
-        <p class="muted tiny">Use códigos ISO em chaves, separados por vírgula. Ex.: <code>{ru},{cn}</code></p>
-        <div class="actions">
-          <button @click="saveConfig" :disabled="busyAction !== ''">Salvar torrc</button>
-          <button class="secondary" @click="serviceAction('restart')" :disabled="busyAction !== ''">Reiniciar Tor</button>
-        </div>
+        <label>ExcludeNodes (avançado) <input v-model="configForm.ExcludeNodes" /></label>
+        <button @click="saveConfig" :disabled="busyAction!==''">Salvar com preview</button>
       </article>
-
-      <article class="card">
-        <h2>Preview do torrc</h2>
-        <textarea class="torrc-preview" :value="rawTorrc" readonly />
-      </article>
+      <article class="card"><h2>Preview do torrc</h2><textarea class="logs" :value="rawTorrc" readonly /></article>
     </section>
 
-    <section class="card">
-      <div class="row-between wrap-mobile">
-        <div>
-          <h2>Onion services</h2>
-          <p class="muted">Cria a pasta do onion, escreve <code>HiddenServiceDir</code> e <code>HiddenServicePort</code> no torrc e mostra o hostname quando o Tor gerar.</p>
-        </div>
-        <button class="secondary" @click="refreshHostnamesUntilReady" :disabled="busyAction !== '' || !onions.length">Atualizar hostnames</button>
-      </div>
-
+    <section v-if="tab==='onions'" class="card">
+      <h2>Onion Services</h2>
       <div class="grid four">
-        <label>Nome da pasta <input v-model="onionForm.name" placeholder="meu-servico" /></label>
-        <label>Porta pública <input v-model.number="onionForm.public_port" type="number" min="1" max="65535" /></label>
-        <label>Host interno <input v-model="onionForm.target_host" placeholder="127.0.0.1" /></label>
-        <label>Porta interna <input v-model.number="onionForm.target_port" type="number" min="1" max="65535" /></label>
-        <label>Senha de acesso (opcional) <input v-model="onionForm.access_password" type="password" placeholder="mínimo 6 caracteres" /></label>
+        <label>Nome <input v-model="onionForm.name" /></label>
+        <label>Porta pública <input v-model.number="onionForm.public_port" type="number" /></label>
+        <label>Host interno <input v-model="onionForm.target_host" /></label>
+        <label>Porta interna <input v-model.number="onionForm.target_port" type="number" /></label>
       </div>
-
-      <div class="actions">
-        <button @click="createOnion" :disabled="busyAction !== ''">Criar onion</button>
-        <button class="secondary" @click="serviceAction('restart')" :disabled="busyAction !== ''">Reiniciar Tor</button>
-      </div>
-
-      <div v-if="onions.length" class="onion-list">
-        <div v-for="item in onions" :key="item.name" class="onion-item">
-          <div class="onion-meta">
-            <div class="row-between wrap-mobile">
-              <strong>{{ item.name }}</strong>
-              <span class="badge" :class="item.hostname_ready ? 'ok' : 'warn'">
-                {{ item.hostname_ready ? 'hostname pronto' : 'hostname pendente' }}
-              </span>
-            </div>
-            <p><code>{{ item.directory }}</code></p>
-            <p>Publica {{ item.public_port }} → {{ item.target_host }}:{{ item.target_port }}</p>
-            <p v-if="item.auth_enabled"><strong>Acesso:</strong> protegido por senha (cliente: <code>{{ item.auth_client_name }}</code>)</p>
-
-            <div v-if="item.hostname_ready && item.hostname" class="hostname-box">
-              <p><strong>Hostname:</strong></p>
-              <code>{{ item.hostname }}</code>
-              <div class="actions compact">
-                <button class="secondary" @click="copyText(item.hostname, 'Hostname')">Copiar hostname</button>
-                <button class="secondary" @click="copyText(item.hostname_path, 'Caminho do hostname')">Copiar caminho</button>
-              </div>
-            </div>
-
-            <div v-else class="hostname-box pending">
-              <p><strong>Hostname ainda não gerado.</strong></p>
-              <p>Isso normalmente quer dizer uma destas coisas:</p>
-              <ul>
-                <li>o Tor ainda não iniciou com sucesso;</li>
-                <li>a porta alvo não está acessível;</li>
-                <li>o Tor subiu e caiu logo depois.</li>
-              </ul>
-              <p><strong>Arquivo esperado:</strong> <code>{{ item.hostname_path || `${item.directory}/hostname` }}</code></p>
-            </div>
-          </div>
-
-          <div class="onion-actions">
-            <button class="secondary" @click="copyText(item.directory, 'Pasta do onion')">Copiar pasta</button>
-            <button class="danger" @click="deleteOnion(item.name)" :disabled="busyAction !== ''">Remover</button>
-          </div>
-        </div>
-      </div>
-      <p v-else>Nenhum onion cadastrado ainda.</p>
+      <button @click="createOnion" :disabled="busyAction!==''">Criar onion</button>
+      <div v-for="item in onions" :key="item.name" class="row-between"><span>{{ item.name }} — {{ item.hostname || 'pendente' }}</span><button class="danger" @click="deleteOnion(item.name)">Remover</button></div>
     </section>
 
-    <section class="grid two stack-mobile">
-      <article class="card">
-        <div class="row-between">
-          <h2>Diagnóstico</h2>
-          <button class="secondary" @click="runDiagnostics" :disabled="busyAction !== ''">Rodar</button>
-        </div>
-        <p><strong>Última checagem:</strong> {{ diagnosticsMeta?.checked_at || '—' }}</p>
-        <p><strong>Execução vinculada:</strong> <code>{{ diagnosticsMeta?.run_id || status?.run_id || '—' }}</code></p>
-        <p><strong>Fonte/Frescor:</strong> {{ diagnosticsMeta?.source || '—' }} / {{ diagnosticsMeta?.freshness || 'pending' }}</p>
-        <p v-if="!diagnostics.length && ['starting','restarting'].includes(status?.status || '')"><strong>Diagnóstico:</strong> em andamento… aguardando bootstrap real.</p>
-        <ul class="diagnostics">
-          <li v-for="check in diagnostics" :key="check.name">
-            <strong>{{ check.ok ? 'OK' : 'Falhou' }}</strong> — {{ check.name }}<br />
-            <span>{{ check.details }}</span>
-          </li>
-        </ul>
-      </article>
+    <LogsView v-if="tab==='logs'" :logs="logs" />
 
-      <article class="card">
-        <h2>Logs recentes</h2>
-        <pre class="logs">{{ logs.map((entry) => `[observed:${entry.observed_at}] ${entry.raw}`).join('\n') }}</pre>
-      </article>
+    <section v-if="tab==='diagnostics'" class="card">
+      <h2>Diagnóstico</h2>
+      <button class="secondary" @click="api('/api/diagnostics/run',{method:'POST'}).then(refreshAll)">Rodar</button>
+      <ul><li v-for="item in diagnostics?.checks || []" :key="item.name"><strong>{{ item.ok ? 'OK' : 'Falhou' }}</strong> — {{ item.name }}: {{ item.details }}</li></ul>
     </section>
+
+    <BackupsView v-if="tab==='backups'" :items="backups" @restored="refreshAll" @toast="handleToast" />
   </main>
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
-
-:global(body) {
-  margin: 0;
-  background:
-    radial-gradient(circle at 10% 8%, rgba(196, 233, 255, 0.72) 0%, rgba(239, 249, 255, 0.92) 34%, #f5fbff 100%),
-    linear-gradient(180deg, #f7fcff 0%, #eef8ff 100%);
-  color: #17324a;
-  font-family: 'Rajdhani', 'Inter', Arial, sans-serif;
-  font-size: 18px;
-  line-height: 1.4;
-}
-.page {
-  max-width: 1320px;
-  margin: 0 auto;
-  padding: 30px 28px 52px;
-  position: relative;
-}
-.page::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    repeating-linear-gradient(
-      180deg,
-      rgba(139, 198, 233, 0.12) 0,
-      rgba(139, 198, 233, 0.12) 1px,
-      transparent 1px,
-      transparent 3px
-    );
-  opacity: 0.38;
-}
-.hero, .row-between, .actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-.hero {
-  margin-bottom: 18px;
-  border: 1px solid rgba(122, 189, 228, 0.45);
-  border-radius: 18px;
-  padding: 18px 20px;
-  background: linear-gradient(130deg, rgba(252, 255, 255, 0.88), rgba(228, 244, 255, 0.84));
-  box-shadow: 0 16px 34px rgba(120, 169, 209, 0.2);
-}
-.title {
-  margin: 0;
-  font-size: clamp(2.1rem, 3vw, 2.8rem);
-  letter-spacing: 0.17em;
-  color: #114b76;
-  text-shadow: 0 0 12px rgba(106, 172, 230, 0.35);
-}
-.subtitle {
-  margin: 6px 0 0;
-  color: #3f6482;
-  letter-spacing: 0.04em;
-  font-size: 1.02rem;
-}
-.wrap-mobile { flex-wrap: wrap; }
-.grid {
-  display: grid;
-  gap: 20px;
-}
-.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.card {
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.88), rgba(231, 245, 255, 0.92));
-  border: 1px solid rgba(133, 189, 224, 0.42);
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: 0 0 0 1px rgba(102, 166, 211, 0.08), 0 14px 30px rgba(117, 165, 206, 0.18), inset 0 0 40px rgba(177, 217, 245, 0.2);
-  backdrop-filter: blur(2px);
-}
-p {
-  margin: 8px 0;
-  line-height: 1.45;
-}
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 14px;
-  font-size: 0.96rem;
-  letter-spacing: 0.04em;
-  color: #2f5f7f;
-}
-input, textarea, button {
-  border-radius: 10px;
-  border: 1px solid rgba(126, 185, 223, 0.52);
-  background: rgba(247, 252, 255, 0.95);
-  color: #14334a;
-  padding: 11px 12px;
-  font-family: 'Rajdhani', 'Inter', Arial, sans-serif;
-  font-size: 0.98rem;
-  letter-spacing: 0.03em;
-}
-input:focus, textarea:focus {
-  outline: none;
-  border-color: #5ea9dd;
-  box-shadow: 0 0 0 3px rgba(91, 171, 225, 0.18);
-}
-button {
-  cursor: pointer;
-  background: linear-gradient(92deg, #5fa7de, #89bfe9);
-  color: #ffffff;
-  font-weight: 700;
-  border: none;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  padding: 10px 14px;
-}
-button.secondary { background: linear-gradient(90deg, #edf7ff, #d6ecff); color: #1f5378; border: 1px solid rgba(110, 171, 215, 0.46); }
-button.danger { background: linear-gradient(90deg, #df6f75, #f29998); color: #ffffff; }
-button:disabled { opacity: .6; cursor: not-allowed; }
-.toast {
-  background: linear-gradient(90deg, rgba(224, 242, 255, 0.96), rgba(197, 228, 253, 0.95));
-  border: 1px solid rgba(117, 176, 216, 0.42);
-  padding: 12px 14px;
-  border-radius: 12px;
-  margin-bottom: 18px;
-  letter-spacing: 0.04em;
-  color: #1e4d70;
-}
-.muted {
-  color: #4f7290;
-  margin-top: 0;
-  line-height: 1.5;
-}
-.torrc-preview, .logs {
-  width: 100%;
-  min-height: 280px;
-  font-family: 'Share Tech Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap;
-  box-sizing: border-box;
-  font-size: 0.95rem;
-  line-height: 1.42;
-}
-.onion-list {
-  margin-top: 20px;
-  display: grid;
-  gap: 14px;
-}
-.onion-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  border: 1px solid rgba(132, 187, 221, 0.4);
-  border-radius: 14px;
-  padding: 16px;
-  background: rgba(243, 251, 255, 0.94);
-}
-.onion-meta { flex: 1; }
-.onion-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 140px;
-}
-.hostname-box {
-  margin-top: 14px;
-  padding: 14px;
-  border-radius: 12px;
-  background: rgba(234, 247, 255, 0.95);
-  border: 1px solid rgba(135, 193, 228, 0.42);
-}
-.hostname-box.pending {
-  border-color: #d19672;
-  background: rgba(255, 235, 222, 0.66);
-}
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.badge.ok {
-  background: rgba(84, 173, 203, 0.2);
-  color: #235c84;
-}
-.badge.warn {
-  background: rgba(229, 168, 120, 0.22);
-  color: #85512b;
-}
-.compact { justify-content: flex-start; }
-.diagnostics {
-  padding-left: 18px;
-  margin: 10px 0 0;
-  display: grid;
-  gap: 10px;
-}
-pre, code {
-  overflow-wrap: anywhere;
-  font-family: 'Share Tech Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.94rem;
-}
-h1, h2 {
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  margin: 0 0 12px;
-  line-height: 1.2;
-}
-h2 {
-  font-size: 1.15rem;
-  color: #1f5377;
-}
-.country-blacklist {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-  font-size: 14px;
-}
-.country-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-button.chip {
-  padding: 8px 10px;
-  font-size: 12px;
-}
-button.chip.active {
-  background: linear-gradient(90deg, #6fb3e4, #a8d1ef);
-  color: #17334b;
-}
-.tiny { font-size: 0.78rem; margin-top: -2px; line-height: 1.45; }
-@media (max-width: 900px) {
-  .two, .four { grid-template-columns: 1fr; }
-  .stack-mobile { grid-template-columns: 1fr; }
-  .onion-item { flex-direction: column; }
-  .onion-actions { min-width: 0; }
-  .page { padding: 22px 16px 30px; }
-  .hero { padding: 14px; }
-}
+:global(body){margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f2f6fa;color:#17324a}
+.page{max-width:1200px;margin:0 auto;padding:20px}.row-between{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.grid{display:grid;gap:12px}.two{grid-template-columns:1fr 1fr}.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:#fff;border:1px solid #d4e0eb;border-radius:10px;padding:14px}.hero{margin-bottom:12px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+button{padding:8px 10px;border-radius:8px;border:none;background:#2f78b7;color:#fff;cursor:pointer}button.secondary{background:#e5eef7;color:#1d4f7f;border:1px solid #b8d0e5}button.danger{background:#c85b5b}
+label{display:flex;flex-direction:column;gap:4px}input,textarea{padding:7px;border:1px solid #bcd0e2;border-radius:8px}.logs{width:100%;min-height:260px;white-space:pre-wrap}
+.toast{padding:10px;background:#eaf4ff;border:1px solid #b4d1ef;border-radius:8px}
+@media (max-width:900px){.two,.four{grid-template-columns:1fr}}
 </style>

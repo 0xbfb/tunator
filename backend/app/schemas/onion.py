@@ -3,10 +3,14 @@ from pydantic import BaseModel, Field
 
 class OnionServiceCreateRequest(BaseModel):
     name: str
-    public_port: int = Field(default=80)
-    target_host: str = Field(default='127.0.0.1')
-    target_port: int
+    public_port: int = Field(default=80, ge=1, le=65535)
+    target_host: str = Field(default='127.0.0.1', min_length=1)
+    target_port: int = Field(ge=1, le=65535)
     access_password: str | None = None
+
+
+class OnionDeleteRequest(BaseModel):
+    remove_directory: bool = False
 
 
 class OnionServiceItem(BaseModel):

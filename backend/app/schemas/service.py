@@ -19,6 +19,13 @@ class ServiceStatusResponse(BaseModel):
     last_error: str | None = None
     socks_port: int | None = None
     control_port: int | None = None
+    managed_by_tunator: bool = False
+    control_connected: bool = False
+    control_authenticated: bool = False
+    tor_version: str | None = None
+    bootstrap_phase: str | None = None
+    bootstrap_progress: int | None = None
+    control_auth_error: str | None = None
     latest_diagnostics: dict | None = None
 
 

@@ -1,10 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.schemas.config import ConfigApplyRequest, ConfigReadResponse, ConfigValidationRequest, ConfigValidationResponse
+from app.schemas.config import (
+    BackupListResponse,
+    BackupRestoreRequest,
+    ConfigApplyRequest,
+    ConfigHistoryResponse,
+    ConfigPreviewResponse,
+    ConfigReadResponse,
+    ConfigValidationRequest,
+    ConfigValidationResponse,
+)
 from app.schemas.diagnostics import DiagnosticsResponse
 from app.schemas.environment import EnvironmentInfo
 from app.schemas.logs import LogResponse
 from app.schemas.onion import (
+    OnionDeleteRequest,
     OnionServiceCreateRequest,
     OnionServiceCreateResponse,
     OnionServiceDeleteResponse,
@@ -41,22 +51,39 @@ def read_config(service: TunatorService = Depends(get_tunator_service)) -> Confi
 
 
 @router.post('/api/config/validate', response_model=ConfigValidationResponse)
-def validate_config(
-    payload: ConfigValidationRequest,
-    service: TunatorService = Depends(get_tunator_service),
-) -> ConfigValidationResponse:
-    return service.validate_config(payload.updates)
+def validate_config(payload: ConfigValidationRequest, service: TunatorService = Depends(get_tunator_service)) -> ConfigValidationResponse:
+    return service.validate_config(payload.updates, advanced_mode=payload.advanced_mode)
+
+
+@router.post('/api/config/preview', response_model=ConfigPreviewResponse)
+def preview_config(payload: ConfigValidationRequest, service: TunatorService = Depends(get_tunator_service)) -> ConfigPreviewResponse:
+    return ConfigPreviewResponse(**service.preview_config(payload.updates, advanced_mode=payload.advanced_mode))
 
 
 @router.post('/api/config/apply')
-def apply_config(
-    payload: ConfigApplyRequest,
-    service: TunatorService = Depends(get_tunator_service),
-) -> dict:
-    result = service.apply_config(payload.updates)
+def apply_config(payload: ConfigApplyRequest, service: TunatorService = Depends(get_tunator_service)) -> dict:
+    result = service.apply_config(payload.updates, advanced_mode=payload.advanced_mode)
     if not result['success']:
         raise HTTPException(status_code=400, detail=result)
     return result
+
+
+@router.get('/api/config/backups', response_model=BackupListResponse)
+def list_backups(service: TunatorService = Depends(get_tunator_service)) -> BackupListResponse:
+    return BackupListResponse(items=service.list_backups())
+
+
+@router.post('/api/config/backups/restore')
+def restore_backup(payload: BackupRestoreRequest, service: TunatorService = Depends(get_tunator_service)) -> dict:
+    try:
+        return {'success': True, **service.restore_backup(payload.backup_name)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail={'success': False, 'message': str(exc)}) from exc
+
+
+@router.get('/api/config/history', response_model=ConfigHistoryResponse)
+def config_history(service: TunatorService = Depends(get_tunator_service)) -> ConfigHistoryResponse:
+    return ConfigHistoryResponse(items=service.config_history())
 
 
 @router.get('/api/onions', response_model=OnionServiceListResponse)
@@ -65,10 +92,7 @@ def list_onions(service: TunatorService = Depends(get_tunator_service)) -> Onion
 
 
 @router.post('/api/onions', response_model=OnionServiceCreateResponse)
-def create_onion(
-    payload: OnionServiceCreateRequest,
-    service: TunatorService = Depends(get_tunator_service),
-) -> OnionServiceCreateResponse:
+def create_onion(payload: OnionServiceCreateRequest, service: TunatorService = Depends(get_tunator_service)) -> OnionServiceCreateResponse:
     try:
         return service.create_onion_service(
             name=payload.name,
@@ -82,9 +106,9 @@ def create_onion(
 
 
 @router.delete('/api/onions/{name}', response_model=OnionServiceDeleteResponse)
-def delete_onion(name: str, service: TunatorService = Depends(get_tunator_service)) -> OnionServiceDeleteResponse:
+def delete_onion(name: str, payload: OnionDeleteRequest = OnionDeleteRequest(), service: TunatorService = Depends(get_tunator_service)) -> OnionServiceDeleteResponse:
     try:
-        return service.delete_onion_service(name)
+        return service.delete_onion_service(name, remove_directory=payload.remove_directory)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail={'success': False, 'message': str(exc)}) from exc
 

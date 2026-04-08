@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import difflib
+import hashlib
+import os
 import re
 import shutil
-from hashlib import sha1
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.constants import LOCAL_TOR_ONIONS_DIR, SUPPORTED_TORRC_OPTIONS
+
+MANAGED_BEGIN = "# BEGIN TUNATOR MANAGED"
+MANAGED_END = "# END TUNATOR MANAGED"
 
 
 @dataclass(slots=True)
@@ -44,16 +49,18 @@ class TorConfigManager:
         return path.read_text(encoding="utf-8")
 
     def _default_base_options(self) -> dict[str, str]:
+        assert self.torrc_path
+        root = Path(self.torrc_path).parent
         return {
             "SOCKSPort": "9050",
             "ControlPort": "9051",
-            "DataDirectory": str((Path(self.torrc_path).parent / "data").resolve()).replace("\\", "/"),
-            "Log": str(f"notice file {(Path(self.torrc_path).parent / 'logs' / 'notices.log').resolve()}").replace("\\", "/"),
+            "DataDirectory": str((root / "data").resolve()).replace("\\", "/"),
+            "Log": str(f"notice file {(root / 'logs' / 'notices.log').resolve()}").replace("\\", "/"),
             "CookieAuthentication": "1",
         }
 
     def parse_model(self) -> dict[str, list[dict[str, str | int | bool | None]] | dict[str, str]]:
-        base_options = self._default_base_options()
+        base_options = self._default_base_options() if self.torrc_path else {}
         onion_services: list[OnionService] = []
         current_onion: OnionService | None = None
 
@@ -69,16 +76,7 @@ class TorConfigManager:
                 directory = value.strip().strip('"')
                 name = Path(directory).name or f"onion-{len(onion_services)+1}"
                 hostname, hostname_path, hostname_ready = self._read_hostname(directory)
-                current_onion = OnionService(
-                    name=name,
-                    directory=directory,
-                    public_port=80,
-                    target_host="127.0.0.1",
-                    target_port=80,
-                    hostname=hostname,
-                    hostname_path=hostname_path,
-                    hostname_ready=hostname_ready,
-                )
+                current_onion = OnionService(name=name, directory=directory, public_port=80, target_host="127.0.0.1", target_port=80, hostname=hostname, hostname_path=hostname_path, hostname_ready=hostname_ready)
                 onion_services.append(current_onion)
                 continue
 
@@ -88,14 +86,6 @@ class TorConfigManager:
                     current_onion.public_port = int(match.group(1))
                     current_onion.target_host = match.group(2)
                     current_onion.target_port = int(match.group(3))
-                else:
-                    parts = value.split()
-                    if len(parts) >= 2 and parts[0].isdigit() and ":" in parts[1]:
-                        host, port = parts[1].rsplit(":", 1)
-                        current_onion.target_host = host
-                        current_onion.public_port = int(parts[0])
-                        if port.isdigit():
-                            current_onion.target_port = int(port)
                 continue
 
             if key == "HiddenServiceAuthorizeClient" and current_onion is not None:
@@ -109,10 +99,7 @@ class TorConfigManager:
             if key not in {"HiddenServiceDir", "HiddenServicePort"}:
                 base_options[key] = value
 
-        return {
-            "base_options": base_options,
-            "onion_services": [self._onion_to_dict(item) for item in onion_services],
-        }
+        return {"base_options": base_options, "onion_services": [self._onion_to_dict(item) for item in onion_services]}
 
     def read_parsed(self) -> dict[str, str]:
         return self.parse_model()["base_options"]  # type: ignore[return-value]
@@ -120,62 +107,52 @@ class TorConfigManager:
     def list_onion_services(self) -> list[dict[str, str | int | bool | None]]:
         return self.parse_model()["onion_services"]  # type: ignore[return-value]
 
-    def validate_updates(self, updates: dict[str, str]) -> ConfigValidationResult:
+    def validate_updates(self, updates: dict[str, str], advanced_mode: bool = False) -> ConfigValidationResult:
         errors: list[str] = []
         warnings: list[str] = []
-
         editable = SUPPORTED_TORRC_OPTIONS | {"CookieAuthentication", "GeoIPFile", "GeoIPv6File"}
+
         for key, value in updates.items():
             if key not in editable:
                 errors.append(f"Unsupported option: {key}")
                 continue
             if key in {"HiddenServiceDir", "HiddenServicePort"}:
-                warnings.append(f"{key} is managed by the onion service UI and is better edited there")
+                warnings.append(f"{key} is managed by the onion service UI")
                 continue
-            if key == "ExcludeNodes" and not str(value).strip():
-                continue
-            if not str(value).strip():
+            normalized = str(value).strip()
+            if key != "ExcludeNodes" and not normalized:
                 errors.append(f"Value for {key} cannot be empty")
+            if key in {"SOCKSPort", "ControlPort"}:
+                if not normalized.isdigit() or not (1 <= int(normalized) <= 65535):
+                    errors.append(f"{key} must be numeric and between 1 and 65535")
+            if key == "DataDirectory" and normalized:
+                if not Path(normalized).is_absolute():
+                    warnings.append("DataDirectory should be an absolute path")
+            if key == "Log" and "file" not in normalized.lower():
+                warnings.append("Using Log notice file ... is recommended")
+            if key == "ExcludeNodes":
+                if normalized and not re.fullmatch(r"(\{[a-zA-Z]{2}\})(,\{[a-zA-Z]{2}\})*", normalized):
+                    warnings.append("ExcludeNodes format expected: {ru},{cn}")
 
-        for numeric_key in ("SOCKSPort", "ControlPort"):
-            if numeric_key in updates and not str(updates[numeric_key]).isdigit():
-                errors.append(f"{numeric_key} must be numeric")
-
-        if "DataDirectory" in updates:
-            data_dir = Path(str(updates["DataDirectory"]))
-            if data_dir.suffix:
-                warnings.append("DataDirectory usually points to a directory, not a file")
-
-        if "Log" in updates and "file" not in str(updates["Log"]).lower():
-            warnings.append("Using a file target in Log is recommended for local diagnostics")
-
-        if "ExcludeNodes" in updates:
-            normalized = str(updates["ExcludeNodes"]).strip()
-            if normalized and "{" not in normalized:
-                warnings.append("Use country codes in braces for ExcludeNodes, e.g. {ru},{cn}")
+        sensitive = {"GeoIPFile", "GeoIPv6File"}
+        if not advanced_mode and any(key in sensitive for key in updates):
+            errors.append("Sensitive options require advanced_mode=true")
 
         return ConfigValidationResult(valid=not errors, errors=errors, warnings=warnings)
 
-    def validate_onion_service(
-        self,
-        name: str,
-        public_port: int,
-        target_host: str,
-        target_port: int,
-        access_password: str | None = None,
-    ) -> ConfigValidationResult:
+    def validate_onion_service(self, name: str, public_port: int, target_host: str, target_port: int, access_password: str | None = None) -> ConfigValidationResult:
         errors: list[str] = []
         warnings: list[str] = []
         safe_name = self._sanitize_onion_name(name)
         if not safe_name:
             errors.append("Onion service name cannot be empty")
-        if safe_name != name.strip():
+        if safe_name != name.strip().lower():
             warnings.append(f"Folder name normalized to {safe_name}")
         for port_name, value in [("public_port", public_port), ("target_port", target_port)]:
             if value < 1 or value > 65535:
                 errors.append(f"{port_name} must be between 1 and 65535")
-        if not target_host.strip():
-            errors.append("target_host cannot be empty")
+        if target_host.strip() not in {"127.0.0.1", "localhost"}:
+            warnings.append("Target host should usually be local (127.0.0.1/localhost)")
         existing_names = {str(item["name"]) for item in self.list_onion_services()}
         if safe_name in existing_names:
             errors.append(f"An onion service named {safe_name} already exists")
@@ -184,41 +161,77 @@ class TorConfigManager:
             errors.append("Password must have at least 6 characters")
         return ConfigValidationResult(valid=not errors, errors=errors, warnings=warnings)
 
+    def list_backups(self) -> list[dict[str, str | int | None]]:
+        if not self.torrc_path:
+            return []
+        path = Path(self.torrc_path)
+        parent = path.parent
+        backups = sorted(parent.glob(f"{path.name}.bak.*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return [
+            {
+                "name": item.name,
+                "path": str(item),
+                "size_bytes": item.stat().st_size,
+                "created_at": datetime.fromtimestamp(item.stat().st_mtime, UTC).isoformat(),
+            }
+            for item in backups
+        ]
+
     def create_backup(self) -> str | None:
         if not self.torrc_path:
             return None
         path = Path(self.torrc_path)
         if not path.exists():
             return None
-        backup_path = path.with_suffix(path.suffix + f".bak.{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}")
+        backup_path = path.with_name(f"{path.name}.bak.{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}")
         shutil.copy2(path, backup_path)
         return str(backup_path)
 
-    def apply_updates(self, updates: dict[str, str]) -> dict[str, str]:
-        validation = self.validate_updates(updates)
+    def restore_backup(self, backup_name: str) -> dict[str, str]:
+        if not self.torrc_path:
+            raise ValueError("torrc path is not configured")
+        path = Path(self.torrc_path)
+        candidate = path.parent / backup_name
+        if not candidate.exists():
+            raise ValueError(f"Backup {backup_name} not found")
+        content = candidate.read_text(encoding="utf-8")
+        self._atomic_write(content)
+        return {"restored_from": str(candidate), "torrc_path": str(path)}
+
+    def preview_updates(self, updates: dict[str, str], advanced_mode: bool = False) -> dict[str, object]:
+        validation = self.validate_updates(updates, advanced_mode=advanced_mode)
+        if not validation.valid:
+            return {"valid": False, "errors": validation.errors, "warnings": validation.warnings, "diff": ""}
+        before = self.read_raw()
+        model = self.parse_model()
+        base_options = dict(model["base_options"])  # type: ignore[arg-type]
+        for key, value in updates.items():
+            normalized = str(value).strip()
+            if key == "ExcludeNodes" and not normalized:
+                base_options.pop(key, None)
+            else:
+                base_options[key] = normalized
+        after = self._render_model(base_options, model["onion_services"])  # type: ignore[arg-type]
+        diff = "\n".join(difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile="torrc(before)", tofile="torrc(after)", lineterm=""))
+        return {"valid": True, "errors": [], "warnings": validation.warnings, "diff": diff, "after": after}
+
+    def apply_updates(self, updates: dict[str, str], advanced_mode: bool = False) -> dict[str, str]:
+        validation = self.validate_updates(updates, advanced_mode=advanced_mode)
         if not validation.valid:
             raise ValueError("; ".join(validation.errors))
         model = self.parse_model()
-        base_options = model["base_options"]  # type: ignore[assignment]
+        base_options = dict(model["base_options"])  # type: ignore[arg-type]
         for key, value in updates.items():
-            if key in {"HiddenServiceDir", "HiddenServicePort"}:
-                continue
             normalized = str(value).strip()
             if key == "ExcludeNodes" and not normalized:
                 base_options.pop(key, None)
                 continue
-            base_options[key] = normalized  # type: ignore[index]
-        self._write_model(base_options, model["onion_services"])
+            base_options[key] = normalized
+        content = self._render_model(base_options, model["onion_services"])  # type: ignore[arg-type]
+        self._atomic_write(content)
         return self.read_parsed()
 
-    def create_onion_service(
-        self,
-        name: str,
-        public_port: int,
-        target_host: str,
-        target_port: int,
-        access_password: str | None = None,
-    ) -> dict[str, str | int | bool | None]:
+    def create_onion_service(self, name: str, public_port: int, target_host: str, target_port: int, access_password: str | None = None) -> dict[str, str | int | bool | None]:
         validation = self.validate_onion_service(name, public_port, target_host, target_port, access_password)
         if not validation.valid:
             raise ValueError("; ".join(validation.errors))
@@ -226,8 +239,7 @@ class TorConfigManager:
         safe_name = self._sanitize_onion_name(name)
         normalized_password = (access_password or "").strip()
         auth_client_name = self._build_auth_client_name(safe_name, normalized_password) if normalized_password else None
-        onions_root = self._ensure_onions_root()
-        service_dir = onions_root / safe_name
+        service_dir = self._ensure_onions_root() / safe_name
         service_dir.mkdir(parents=True, exist_ok=True)
 
         model = self.parse_model()
@@ -245,22 +257,29 @@ class TorConfigManager:
         }
         onion_services = list(model["onion_services"])
         onion_services.append(onion)
-        self._write_model(model["base_options"], onion_services)
+        self._atomic_write(self._render_model(model["base_options"], onion_services))  # type: ignore[arg-type]
         return onion
 
-    def remove_onion_service(self, name: str) -> dict[str, str | bool]:
+    def remove_onion_service(self, name: str, remove_directory: bool = False) -> dict[str, str | bool]:
         safe_name = self._sanitize_onion_name(name)
         model = self.parse_model()
         onion_services = list(model["onion_services"])
+        removed_item = next((item for item in onion_services if item["name"] == safe_name), None)
         remaining = [item for item in onion_services if item["name"] != safe_name]
-        if len(remaining) == len(onion_services):
+        if not removed_item:
             raise ValueError(f"Onion service {safe_name} was not found")
-        self._write_model(model["base_options"], remaining)
+        self._atomic_write(self._render_model(model["base_options"], remaining))  # type: ignore[arg-type]
+        if remove_directory:
+            directory = Path(str(removed_item["directory"]))
+            if directory.exists():
+                shutil.rmtree(directory)
         return {"name": safe_name, "removed": True}
 
-    def _write_model(self, base_options: dict[str, str], onion_services: list[dict[str, str | int | bool | None]]) -> None:
-        if not self.torrc_path:
-            raise ValueError("torrc path is not configured")
+    def _render_model(self, base_options: dict[str, str], onion_services: list[dict[str, str | int | bool | None]]) -> str:
+        existing = self.read_raw().splitlines()
+        prefix_lines = self._extract_unmanaged_prefix(existing)
+        suffix_lines = self._extract_unmanaged_suffix(existing)
+
         lines = []
         ordered_base = ["SOCKSPort", "ControlPort", "DataDirectory", "Log", "ExcludeNodes", "CookieAuthentication", "GeoIPFile", "GeoIPv6File"]
         for key in ordered_base:
@@ -269,28 +288,60 @@ class TorConfigManager:
         for key in sorted(base_options.keys()):
             if key not in ordered_base:
                 lines.append(f"{key} {base_options[key]}")
-        if onion_services:
+
+        lines.append("")
+        lines.append(MANAGED_BEGIN)
+        lines.append("# Managed onion services")
+        for item in onion_services:
+            lines.append(f"HiddenServiceDir {item['directory']}")
+            lines.append(f"HiddenServicePort {item['public_port']} {item['target_host']}:{item['target_port']}")
+            if item.get("auth_enabled") and item.get("auth_client_name"):
+                lines.append(f"HiddenServiceAuthorizeClient basic {item['auth_client_name']}")
             lines.append("")
-            lines.append("# Managed onion services")
-            for item in onion_services:
-                lines.append(f"HiddenServiceDir {item['directory']}")
-                lines.append(f"HiddenServicePort {item['public_port']} {item['target_host']}:{item['target_port']}")
-                if item.get("auth_enabled") and item.get("auth_client_name"):
-                    lines.append(f"HiddenServiceAuthorizeClient basic {item['auth_client_name']}")
-                lines.append("")
-        Path(self.torrc_path).write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        lines.append(MANAGED_END)
+
+        content_parts = []
+        if prefix_lines:
+            content_parts.extend(prefix_lines)
+        content_parts.extend(lines)
+        if suffix_lines:
+            content_parts.extend(suffix_lines)
+        return "\n".join([line for line in content_parts]).strip() + "\n"
+
+    def _extract_unmanaged_prefix(self, lines: list[str]) -> list[str]:
+        if MANAGED_BEGIN in lines:
+            idx = lines.index(MANAGED_BEGIN)
+            return lines[:idx]
+        return []
+
+    def _extract_unmanaged_suffix(self, lines: list[str]) -> list[str]:
+        if MANAGED_END in lines:
+            idx = lines.index(MANAGED_END)
+            return lines[idx + 1 :]
+        return []
+
+    def _atomic_write(self, content: str) -> None:
+        if not self.torrc_path:
+            raise ValueError("torrc path is not configured")
+        target = Path(self.torrc_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.tmp")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
 
     def _ensure_onions_root(self) -> Path:
-        onion_root = LOCAL_TOR_ONIONS_DIR
-        onion_root.mkdir(parents=True, exist_ok=True)
-        return onion_root
+        LOCAL_TOR_ONIONS_DIR.mkdir(parents=True, exist_ok=True)
+        return LOCAL_TOR_ONIONS_DIR
 
     def _sanitize_onion_name(self, name: str) -> str:
         safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", name.strip()).strip("-._")
         return safe.lower()
 
     def _build_auth_client_name(self, safe_name: str, password: str) -> str:
-        digest = sha1(password.encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.sha1(password.encode("utf-8")).hexdigest()[:10]
         return f"{safe_name}-{digest}"
 
     def _read_hostname(self, directory: str) -> tuple[str | None, str | None, bool]:

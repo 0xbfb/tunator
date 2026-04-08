@@ -202,7 +202,11 @@ class TorRuntimeManager:
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(target)
+            for member in tar.getmembers():
+                member_path = (target / member.name).resolve()
+                if not str(member_path).startswith(str(target.resolve())):
+                    raise RuntimeError(f"Unsafe archive path detected: {member.name}")
+                tar.extract(member, target)
         self.ensure_default_torrc(overwrite=True)
         return target
 

@@ -5,6 +5,7 @@ class DiagnosticItem(BaseModel):
     name: str
     ok: bool
     details: str
+    recommendation: str | None = None
 
 
 class DiagnosticsResponse(BaseModel):
