@@ -121,6 +121,8 @@ class TorConfigManager:
             if key in {"HiddenServiceDir", "HiddenServicePort"}:
                 warnings.append(f"{key} is managed by the onion service UI and is better edited there")
                 continue
+            if key == "ExcludeNodes" and not str(value).strip():
+                continue
             if not str(value).strip():
                 errors.append(f"Value for {key} cannot be empty")
 
@@ -135,6 +137,11 @@ class TorConfigManager:
 
         if "Log" in updates and "file" not in str(updates["Log"]).lower():
             warnings.append("Using a file target in Log is recommended for local diagnostics")
+
+        if "ExcludeNodes" in updates:
+            normalized = str(updates["ExcludeNodes"]).strip()
+            if normalized and "{" not in normalized:
+                warnings.append("Use country codes in braces for ExcludeNodes, e.g. {ru},{cn}")
 
         return ConfigValidationResult(valid=not errors, errors=errors, warnings=warnings)
 
@@ -175,7 +182,11 @@ class TorConfigManager:
         for key, value in updates.items():
             if key in {"HiddenServiceDir", "HiddenServicePort"}:
                 continue
-            base_options[key] = str(value).strip()  # type: ignore[index]
+            normalized = str(value).strip()
+            if key == "ExcludeNodes" and not normalized:
+                base_options.pop(key, None)
+                continue
+            base_options[key] = normalized  # type: ignore[index]
         self._write_model(base_options, model["onion_services"])
         return self.read_parsed()
 
@@ -219,7 +230,7 @@ class TorConfigManager:
         if not self.torrc_path:
             raise ValueError("torrc path is not configured")
         lines = []
-        ordered_base = ["SOCKSPort", "ControlPort", "DataDirectory", "Log", "CookieAuthentication", "GeoIPFile", "GeoIPv6File"]
+        ordered_base = ["SOCKSPort", "ControlPort", "DataDirectory", "Log", "ExcludeNodes", "CookieAuthentication", "GeoIPFile", "GeoIPv6File"]
         for key in ordered_base:
             if key in base_options:
                 lines.append(f"{key} {base_options[key]}")
