@@ -375,9 +375,9 @@ onMounted(async () => {
 :global(body) {
   margin: 0;
   background:
-    radial-gradient(circle at 20% 10%, rgba(26, 94, 130, 0.35) 0%, rgba(7, 21, 39, 0.88) 38%, #02060d 100%),
-    linear-gradient(180deg, #030811 0%, #02060d 100%);
-  color: #d8f8ff;
+    radial-gradient(circle at 10% 8%, rgba(196, 233, 255, 0.72) 0%, rgba(239, 249, 255, 0.92) 34%, #f5fbff 100%),
+    linear-gradient(180deg, #f7fcff 0%, #eef8ff 100%);
+  color: #17324a;
   font-family: 'Rajdhani', 'Inter', Arial, sans-serif;
   font-size: 18px;
   line-height: 1.4;
@@ -385,7 +385,7 @@ onMounted(async () => {
 .page {
   max-width: 1320px;
   margin: 0 auto;
-  padding: 30px 28px 44px;
+  padding: 30px 28px 52px;
   position: relative;
 }
 .page::before {
@@ -396,13 +396,12 @@ onMounted(async () => {
   background:
     repeating-linear-gradient(
       180deg,
-      rgba(132, 224, 255, 0.06) 0,
-      rgba(132, 224, 255, 0.06) 1px,
+      rgba(139, 198, 233, 0.12) 0,
+      rgba(139, 198, 233, 0.12) 1px,
       transparent 1px,
       transparent 3px
     );
-  mix-blend-mode: screen;
-  opacity: 0.2;
+  opacity: 0.38;
 }
 .hero, .row-between, .actions {
   display: flex;
@@ -412,19 +411,22 @@ onMounted(async () => {
 }
 .hero {
   margin-bottom: 18px;
-  border: 1px solid rgba(90, 219, 255, 0.26);
-  border-radius: 14px;
-  padding: 16px 18px;
-  background: linear-gradient(130deg, rgba(9, 31, 47, 0.75), rgba(4, 16, 28, 0.65));
+  border: 1px solid rgba(122, 189, 228, 0.45);
+  border-radius: 18px;
+  padding: 18px 20px;
+  background: linear-gradient(130deg, rgba(252, 255, 255, 0.88), rgba(228, 244, 255, 0.84));
+  box-shadow: 0 16px 34px rgba(120, 169, 209, 0.2);
 }
 .title {
   margin: 0;
   font-size: clamp(2.1rem, 3vw, 2.8rem);
-  letter-spacing: 0.14em;
+  letter-spacing: 0.17em;
+  color: #114b76;
+  text-shadow: 0 0 12px rgba(106, 172, 230, 0.35);
 }
 .subtitle {
   margin: 6px 0 0;
-  color: #9ad8e9;
+  color: #3f6482;
   letter-spacing: 0.04em;
   font-size: 1.02rem;
 }
@@ -436,12 +438,12 @@ onMounted(async () => {
 .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .card {
-  background: linear-gradient(165deg, rgba(8, 22, 38, 0.9), rgba(4, 12, 24, 0.95));
-  border: 1px solid rgba(90, 219, 255, 0.3);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.88), rgba(231, 245, 255, 0.92));
+  border: 1px solid rgba(133, 189, 224, 0.42);
   border-radius: 16px;
   padding: 20px;
-  box-shadow: 0 0 0 1px rgba(46, 197, 255, 0.08), 0 14px 36px rgba(0, 0, 0, 0.42), inset 0 0 36px rgba(26, 107, 168, 0.12);
-  backdrop-filter: blur(3px);
+  box-shadow: 0 0 0 1px rgba(102, 166, 211, 0.08), 0 14px 30px rgba(117, 165, 206, 0.18), inset 0 0 40px rgba(177, 217, 245, 0.2);
+  backdrop-filter: blur(2px);
 }
 p {
   margin: 8px 0;
@@ -454,13 +456,13 @@ label {
   margin-bottom: 14px;
   font-size: 0.96rem;
   letter-spacing: 0.04em;
-  color: #b4ecfa;
+  color: #2f5f7f;
 }
 input, textarea, button {
   border-radius: 10px;
-  border: 1px solid rgba(91, 211, 255, 0.34);
-  background: rgba(2, 10, 20, 0.85);
-  color: #def6ff;
+  border: 1px solid rgba(126, 185, 223, 0.52);
+  background: rgba(247, 252, 255, 0.95);
+  color: #14334a;
   padding: 11px 12px;
   font-family: 'Rajdhani', 'Inter', Arial, sans-serif;
   font-size: 0.98rem;
@@ -468,32 +470,33 @@ input, textarea, button {
 }
 input:focus, textarea:focus {
   outline: none;
-  border-color: #5eddff;
-  box-shadow: 0 0 0 2px rgba(94, 221, 255, 0.22);
+  border-color: #5ea9dd;
+  box-shadow: 0 0 0 3px rgba(91, 171, 225, 0.18);
 }
 button {
   cursor: pointer;
-  background: linear-gradient(90deg, #1b9bff, #14d4ff);
-  color: #02111f;
+  background: linear-gradient(92deg, #5fa7de, #89bfe9);
+  color: #ffffff;
   font-weight: 700;
   border: none;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   padding: 10px 14px;
 }
-button.secondary { background: linear-gradient(90deg, #19334a, #225a80); color: #d9f7ff; }
-button.danger { background: linear-gradient(90deg, #96231f, #d84f2a); color: #fff4eb; }
+button.secondary { background: linear-gradient(90deg, #edf7ff, #d6ecff); color: #1f5378; border: 1px solid rgba(110, 171, 215, 0.46); }
+button.danger { background: linear-gradient(90deg, #df6f75, #f29998); color: #ffffff; }
 button:disabled { opacity: .6; cursor: not-allowed; }
 .toast {
-  background: linear-gradient(90deg, rgba(24, 74, 120, 0.95), rgba(19, 153, 187, 0.95));
-  border: 1px solid rgba(103, 228, 255, 0.4);
+  background: linear-gradient(90deg, rgba(224, 242, 255, 0.96), rgba(197, 228, 253, 0.95));
+  border: 1px solid rgba(117, 176, 216, 0.42);
   padding: 12px 14px;
   border-radius: 12px;
   margin-bottom: 18px;
   letter-spacing: 0.04em;
+  color: #1e4d70;
 }
 .muted {
-  color: #9cd8eb;
+  color: #4f7290;
   margin-top: 0;
   line-height: 1.5;
 }
@@ -515,10 +518,10 @@ button:disabled { opacity: .6; cursor: not-allowed; }
   display: flex;
   justify-content: space-between;
   gap: 18px;
-  border: 1px solid rgba(75, 197, 255, 0.25);
+  border: 1px solid rgba(132, 187, 221, 0.4);
   border-radius: 14px;
   padding: 16px;
-  background: rgba(2, 10, 20, 0.88);
+  background: rgba(243, 251, 255, 0.94);
 }
 .onion-meta { flex: 1; }
 .onion-actions {
@@ -531,12 +534,12 @@ button:disabled { opacity: .6; cursor: not-allowed; }
   margin-top: 14px;
   padding: 14px;
   border-radius: 12px;
-  background: #111827;
-  border: 1px solid rgba(75, 197, 255, 0.25);
+  background: rgba(234, 247, 255, 0.95);
+  border: 1px solid rgba(135, 193, 228, 0.42);
 }
 .hostname-box.pending {
-  border-color: #bf6a2e;
-  background: rgba(191, 106, 46, 0.2);
+  border-color: #d19672;
+  background: rgba(255, 235, 222, 0.66);
 }
 .badge {
   display: inline-flex;
@@ -549,12 +552,12 @@ button:disabled { opacity: .6; cursor: not-allowed; }
   text-transform: uppercase;
 }
 .badge.ok {
-  background: rgba(18, 165, 144, 0.22);
-  color: #86fff0;
+  background: rgba(84, 173, 203, 0.2);
+  color: #235c84;
 }
 .badge.warn {
-  background: rgba(214, 104, 47, 0.24);
-  color: #ffd4a8;
+  background: rgba(229, 168, 120, 0.22);
+  color: #85512b;
 }
 .compact { justify-content: flex-start; }
 .diagnostics {
@@ -576,7 +579,7 @@ h1, h2 {
 }
 h2 {
   font-size: 1.15rem;
-  color: #c9f6ff;
+  color: #1f5377;
 }
 .country-blacklist {
   display: flex;
@@ -595,8 +598,8 @@ button.chip {
   font-size: 12px;
 }
 button.chip.active {
-  background: linear-gradient(90deg, #1b9bff, #14d4ff);
-  color: #02111f;
+  background: linear-gradient(90deg, #6fb3e4, #a8d1ef);
+  color: #17334b;
 }
 .tiny { font-size: 0.78rem; margin-top: -2px; line-height: 1.45; }
 @media (max-width: 900px) {
