@@ -249,7 +249,22 @@ onMounted(async () => {
         <label>ControlPort <input v-model="configForm.ControlPort" /></label>
         <label>DataDirectory <input v-model="configForm.DataDirectory" /></label>
         <label>Log <input v-model="configForm.Log" /></label>
-        <label>Blacklist de países (ExcludeNodes) <input v-model="configForm.ExcludeNodes" placeholder="{ru},{cn},{kp}" /></label>
+        <div class="country-blacklist">
+          <span>Blacklist de países</span>
+          <div class="country-chips">
+            <button
+              v-for="option in countryBlacklistOptions"
+              :key="option.code"
+              type="button"
+              class="secondary chip"
+              :class="{ active: selectedCountryBlacklist.includes(option.code) }"
+              @click="toggleCountryBlacklist(option.code)"
+            >
+              {{ option.label }} ({{ option.code.toUpperCase() }})
+            </button>
+          </div>
+        </div>
+        <label>ExcludeNodes (avançado) <input v-model="configForm.ExcludeNodes" placeholder="{ru},{cn},{kp}" @blur="syncCountriesFromExcludeNodes" /></label>
         <p class="muted tiny">Use códigos ISO em chaves, separados por vírgula. Ex.: <code>{ru},{cn}</code></p>
         <div class="actions">
           <button @click="saveConfig" :disabled="busyAction !== ''">Salvar torrc</button>
@@ -556,6 +571,26 @@ h1, h2 {
 h2 {
   font-size: 1.15rem;
   color: #c9f6ff;
+}
+.country-blacklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.country-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+button.chip {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+button.chip.active {
+  background: linear-gradient(90deg, #1b9bff, #14d4ff);
+  color: #02111f;
 }
 .tiny { font-size: 0.78rem; margin-top: -2px; line-height: 1.45; }
 @media (max-width: 900px) {
