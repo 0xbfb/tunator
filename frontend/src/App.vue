@@ -72,6 +72,20 @@ const phaseLabel = computed(() => {
   return map[phase || ''] || '—'
 })
 
+function formatLogRaw(raw: unknown): string {
+  if (typeof raw === 'string') return raw
+  if (raw == null) return ''
+  try {
+    return JSON.stringify(raw)
+  } catch {
+    return String(raw)
+  }
+}
+
+const renderedLogs = computed(() =>
+  logs.value.map((entry) => `[observed:${entry.observed_at}] ${formatLogRaw(entry.raw)}`).join('\n'),
+)
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${apiBase}${path}`
   let res: Response
@@ -416,7 +430,7 @@ onMounted(async () => {
 
       <article class="card">
         <h2>Logs recentes</h2>
-        <pre class="logs">{{ logs.map((entry) => `[observed:${entry.observed_at}] ${entry.raw}`).join('\n') }}</pre>
+        <pre class="logs">{{ renderedLogs }}</pre>
       </article>
     </section>
   </main>
