@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.core.config.tor_config_manager import TorConfigManager
+from app.core.detection.environment_detector import EnvironmentDetectionResult, EnvironmentDetector
+from app.core.service.tor_service_manager import TorServiceManager
+
+
+@dataclass(slots=True)
+class DiagnosticCheck:
+    name: str
+    ok: bool
+    details: str
+
+
+class DiagnosticsRunner:
+    def __init__(self, env: EnvironmentDetectionResult, detector: EnvironmentDetector, service_manager: TorServiceManager, config_manager: TorConfigManager):
+        self.env = env
+        self.detector = detector
+        self.service_manager = service_manager
+        self.config_manager = config_manager
+
+    def run(self) -> list[DiagnosticCheck]:
+        config = self.config_manager.read_parsed()
+        socks_port = int(config.get("SOCKSPort", "9050")) if config.get("SOCKSPort", "9050").isdigit() else 9050
+        control_port = int(config.get("ControlPort", "9051")) if config.get("ControlPort", "9051").isdigit() else 9051
+        status = self.service_manager.status()
+
+        checks = [
+            DiagnosticCheck(name="tor_binary_detected", ok=self.env.tor_installed, details=self.env.tor_binary_path or "Project-local Tor binary not found"),
+            DiagnosticCheck(name="torrc_detected", ok=bool(self.env.torrc_path), details=self.env.torrc_path or "Project-local torrc not found"),
+            DiagnosticCheck(name="runtime_platform_supported", ok=self.env.supported_platform, details=self.env.bundle_download_url or "No official bundle mapped for this platform"),
+            DiagnosticCheck(name="service_running", ok=status.running, details=status.message),
+            DiagnosticCheck(name="socks_port_open", ok=self.detector.is_port_open("127.0.0.1", socks_port), details=f"Checked 127.0.0.1:{socks_port}"),
+            DiagnosticCheck(name="control_port_open", ok=self.detector.is_port_open("127.0.0.1", control_port), details=f"Checked 127.0.0.1:{control_port}"),
+        ]
+        return checks

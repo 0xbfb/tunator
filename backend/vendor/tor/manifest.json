@@ -1,0 +1,30 @@
+{
+  "linux-x86_64": {
+    "browser_version": "15.0.9",
+    "tor_version": "0.4.9.6",
+    "archive_name": "tor-expert-bundle-linux-x86_64-15.0.9.tar.gz",
+    "url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-linux-x86_64-15.0.9.tar.gz",
+    "signature_url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-linux-x86_64-15.0.9.tar.gz.asc"
+  },
+  "windows-x86_64": {
+    "browser_version": "15.0.9",
+    "tor_version": "0.4.9.6",
+    "archive_name": "tor-expert-bundle-windows-x86_64-15.0.9.tar.gz",
+    "url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-windows-x86_64-15.0.9.tar.gz",
+    "signature_url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-windows-x86_64-15.0.9.tar.gz.asc"
+  },
+  "macos-x86_64": {
+    "browser_version": "15.0.9",
+    "tor_version": "0.4.9.6",
+    "archive_name": "tor-expert-bundle-macos-x86_64-15.0.9.tar.gz",
+    "url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-macos-x86_64-15.0.9.tar.gz",
+    "signature_url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-macos-x86_64-15.0.9.tar.gz.asc"
+  },
+  "macos-aarch64": {
+    "browser_version": "15.0.9",
+    "tor_version": "0.4.9.6",
+    "archive_name": "tor-expert-bundle-macos-aarch64-15.0.9.tar.gz",
+    "url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-macos-aarch64-15.0.9.tar.gz",
+    "signature_url": "https://archive.torproject.org/tor-package-archive/torbrowser/15.0.9/tor-expert-bundle-macos-aarch64-15.0.9.tar.gz.asc"
+  }
+}
