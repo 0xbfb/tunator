@@ -42,10 +42,12 @@ def test_onion_create_and_list_endpoints(client: TestClient) -> None:
         'public_port': 80,
         'target_host': '127.0.0.1',
         'target_port': 3000,
+        'access_password': 'segredo123',
     })
     assert create.status_code == 200
     payload = create.json()
     assert payload['item']['name'] == 'meu-site'
+    assert payload['item']['auth_enabled'] is True
 
     listing = client.get('/api/onions')
     assert listing.status_code == 200

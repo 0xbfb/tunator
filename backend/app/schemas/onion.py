@@ -6,6 +6,7 @@ class OnionServiceCreateRequest(BaseModel):
     public_port: int = Field(default=80)
     target_host: str = Field(default='127.0.0.1')
     target_port: int
+    access_password: str | None = None
 
 
 class OnionServiceItem(BaseModel):
@@ -17,6 +18,8 @@ class OnionServiceItem(BaseModel):
     hostname: str | None = None
     hostname_path: str | None = None
     hostname_ready: bool = False
+    auth_enabled: bool = False
+    auth_client_name: str | None = None
 
 
 class OnionServiceListResponse(BaseModel):

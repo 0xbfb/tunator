@@ -75,6 +75,7 @@ def create_onion(
             public_port=payload.public_port,
             target_host=payload.target_host,
             target_port=payload.target_port,
+            access_password=payload.access_password,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={'success': False, 'message': str(exc)}) from exc
