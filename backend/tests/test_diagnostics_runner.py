@@ -4,6 +4,7 @@ from app.core.config.tor_config_manager import TorConfigManager
 from app.core.detection.environment_detector import EnvironmentDetectionResult, EnvironmentDetector
 from app.core.diagnostics.diagnostics_runner import DiagnosticsRunner
 from app.core.service.tor_service_manager import TorServiceManager
+from app.db.repository import DatabaseRepository
 
 
 def test_diagnostics_include_runtime_support_flag(tmp_path: Path) -> None:
@@ -26,12 +27,14 @@ def test_diagnostics_include_runtime_support_flag(tmp_path: Path) -> None:
     )
 
     detector = EnvironmentDetector(torrc_env=str(torrc))
-    manager = TorServiceManager(env)
+    repo = DatabaseRepository(db_path=str(tmp_path / "test.db"))
+    repo.init_db()
+    manager = TorServiceManager(env, detector, repo)
     config_manager = TorConfigManager(str(torrc))
     runner = DiagnosticsRunner(env, detector, manager, config_manager)
 
-    checks = runner.run()
-    names = {check.name for check in checks}
+    result = runner.run()
+    names = {check.name for check in result.checks}
 
     assert "runtime_platform_supported" in names
     assert "tor_binary_detected" in names

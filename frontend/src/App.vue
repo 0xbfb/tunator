@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 
-type StatusResponse = { running: boolean; source: string; message: string; pid?: number | null }
+type DiagnosticsPayload = { run_id?: string | null; checked_at?: string; source?: string; freshness?: string; checks: DiagnosticItem[] }
+type StatusResponse = {
+  running: boolean
+  source: string
+  message: string
+  pid?: number | null
+  run_id?: string | null
+  status?: string
+  phase?: string
+  latest_diagnostics?: DiagnosticsPayload | null
+}
 type EnvironmentResponse = { os_name: string; tor_installed: boolean; tor_source: string; tor_binary_path?: string | null; torrc_path?: string | null; log_path?: string | null; bundle_download_url?: string | null }
 type OnionItem = {
   name: string
@@ -17,6 +27,7 @@ type OnionItem = {
 }
 type ConfigResponse = { raw: string; base_options: Record<string, string>; onion_services: OnionItem[] }
 type DiagnosticItem = { name: string; ok: boolean; details: string }
+type LogEntry = { raw: string; observed_at: string }
 
 const apiBase = ((import.meta as any).env?.VITE_API_BASE || '').replace(/\/$/, '')
 const loading = ref(false)
@@ -25,7 +36,8 @@ const toast = ref('')
 const environment = ref<EnvironmentResponse | null>(null)
 const status = ref<StatusResponse | null>(null)
 const diagnostics = ref<DiagnosticItem[]>([])
-const logs = ref<string[]>([])
+const diagnosticsMeta = ref<{ run_id?: string | null; checked_at?: string; source?: string; freshness?: string } | null>(null)
+const logs = ref<LogEntry[]>([])
 const rawTorrc = ref('')
 const configForm = reactive({
   SOCKSPort: '9050',
@@ -42,8 +54,23 @@ const onionForm = reactive({
   access_password: '',
 })
 const onions = ref<OnionItem[]>([])
+const countryBlacklistOptions = [{ code: 'ru', label: 'Rússia' }, { code: 'cn', label: 'China' }, { code: 'kp', label: 'Coreia do Norte' }]
+const selectedCountryBlacklist = ref<string[]>([])
 
 const pendingOnions = computed(() => onions.value.filter((item) => !item.hostname_ready))
+const phaseLabel = computed(() => {
+  const phase = status.value?.phase
+  const map: Record<string, string> = {
+    awaiting_initialization: 'Aguardando inicialização',
+    bootstrap_in_progress: 'Bootstrap em andamento',
+    verifying_ports: 'Verificando portas',
+    ready: 'Pronto',
+    failed: 'Falhou',
+    stopping: 'Parando',
+    idle: 'Parado',
+  }
+  return map[phase || ''] || '—'
+})
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${apiBase}${path}`
@@ -71,12 +98,14 @@ async function refreshAll() {
       api<EnvironmentResponse>('/api/environment'),
       api<StatusResponse>('/api/status'),
       api<ConfigResponse>('/api/config'),
-      api<{ entries: string[] }>('/api/logs?limit=100'),
+      api<{ entries: LogEntry[] }>('/api/logs?limit=100'),
     ])
     environment.value = env
     status.value = st
     rawTorrc.value = cfg.raw
     logs.value = logRes.entries
+    diagnosticsMeta.value = st.latest_diagnostics || null
+    diagnostics.value = st.latest_diagnostics?.checks || diagnostics.value
     onions.value = cfg.onion_services || []
     configForm.SOCKSPort = cfg.base_options.SOCKSPort || '9050'
     configForm.ControlPort = cfg.base_options.ControlPort || '9051'
@@ -103,8 +132,9 @@ async function refreshHostnamesUntilReady() {
 async function runDiagnostics() {
   busyAction.value = 'diagnostics'
   try {
-    const result = await api<{ checks: DiagnosticItem[] }>('/api/diagnostics/run', { method: 'POST' })
+    const result = await api<DiagnosticsPayload>('/api/diagnostics/run', { method: 'POST' })
     diagnostics.value = result.checks
+    diagnosticsMeta.value = result
     toast.value = 'Diagnóstico atualizado.'
   } catch (err: any) {
     toast.value = err.message || String(err)
@@ -118,6 +148,10 @@ async function serviceAction(action: 'start' | 'stop' | 'restart') {
   try {
     const result = await api<{ message: string }>(`/api/service/${action}`, { method: 'POST' })
     toast.value = result.message
+    if (action === 'start' || action === 'restart') {
+      diagnosticsMeta.value = null
+      diagnostics.value = []
+    }
     await refreshAll()
     if ((action === 'start' || action === 'restart') && status.value?.running && pendingOnions.value.length) {
       await refreshHostnamesUntilReady()
@@ -127,6 +161,19 @@ async function serviceAction(action: 'start' | 'stop' | 'restart') {
   } finally {
     busyAction.value = ''
   }
+}
+
+function toggleCountryBlacklist(code: string) {
+  const current = new Set(selectedCountryBlacklist.value)
+  if (current.has(code)) current.delete(code)
+  else current.add(code)
+  selectedCountryBlacklist.value = Array.from(current)
+  configForm.ExcludeNodes = selectedCountryBlacklist.value.map((item) => `{${item}}`).join(',')
+}
+
+function syncCountriesFromExcludeNodes() {
+  const matches = configForm.ExcludeNodes.match(/\{([a-z]{2})\}/gi) || []
+  selectedCountryBlacklist.value = matches.map((item) => item.replace(/[{}]/g, '').toLowerCase())
 }
 
 async function saveConfig() {
@@ -225,9 +272,11 @@ onMounted(async () => {
     <section class="grid two">
       <article class="card">
         <h2>Status</h2>
-        <p><strong>Tor:</strong> {{ status?.running ? 'rodando' : 'parado' }}</p>
+        <p><strong>Serviço:</strong> {{ status?.status || (status?.running ? 'running' : 'stopped') }}</p>
+        <p><strong>Fase:</strong> {{ phaseLabel }}</p>
         <p><strong>Mensagem:</strong> {{ status?.message || '—' }}</p>
         <p><strong>PID:</strong> {{ status?.pid ?? '—' }}</p>
+        <p><strong>Run ID:</strong> <code>{{ status?.run_id || '—' }}</code></p>
         <p><strong>Origem:</strong> {{ status?.source || '—' }}</p>
         <div class="actions">
           <button @click="serviceAction('start')" :disabled="busyAction !== ''">Iniciar</button>
@@ -353,6 +402,10 @@ onMounted(async () => {
           <h2>Diagnóstico</h2>
           <button class="secondary" @click="runDiagnostics" :disabled="busyAction !== ''">Rodar</button>
         </div>
+        <p><strong>Última checagem:</strong> {{ diagnosticsMeta?.checked_at || '—' }}</p>
+        <p><strong>Execução vinculada:</strong> <code>{{ diagnosticsMeta?.run_id || status?.run_id || '—' }}</code></p>
+        <p><strong>Fonte/Frescor:</strong> {{ diagnosticsMeta?.source || '—' }} / {{ diagnosticsMeta?.freshness || 'pending' }}</p>
+        <p v-if="!diagnostics.length && ['starting','restarting'].includes(status?.status || '')"><strong>Diagnóstico:</strong> em andamento… aguardando bootstrap real.</p>
         <ul class="diagnostics">
           <li v-for="check in diagnostics" :key="check.name">
             <strong>{{ check.ok ? 'OK' : 'Falhou' }}</strong> — {{ check.name }}<br />
@@ -363,7 +416,7 @@ onMounted(async () => {
 
       <article class="card">
         <h2>Logs recentes</h2>
-        <pre class="logs">{{ logs.join('\n') }}</pre>
+        <pre class="logs">{{ logs.map((entry) => `[observed:${entry.observed_at}] ${entry.raw}`).join('\n') }}</pre>
       </article>
     </section>
   </main>

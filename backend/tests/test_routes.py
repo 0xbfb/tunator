@@ -58,3 +58,5 @@ def test_logs_endpoint(client: TestClient) -> None:
     response = client.get('/api/logs')
     assert response.status_code == 200
     assert response.json()['entries']
+    assert 'raw' in response.json()['entries'][0]
+    assert 'observed_at' in response.json()['entries'][0]

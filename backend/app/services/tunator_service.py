@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 from app.core.config.tor_config_manager import TorConfigManager
 from app.core.constants import SUPPORTED_TORRC_OPTIONS
 from app.core.detection.environment_detector import EnvironmentDetector
 from app.core.diagnostics.diagnostics_runner import DiagnosticsRunner
-from app.core.logs.log_reader import LogReader
+from app.core.log_reader import LogReader
 from app.core.service.tor_service_manager import TorServiceManager
 from app.db.repository import DatabaseRepository
 from app.schemas.config import ConfigReadResponse, ConfigValidationResponse
 from app.schemas.diagnostics import DiagnosticItem, DiagnosticsResponse
 from app.schemas.environment import EnvironmentInfo
-from app.schemas.logs import LogResponse
+from app.schemas.logs import LogEntry, LogResponse
 from app.schemas.onion import OnionServiceCreateResponse, OnionServiceDeleteResponse, OnionServiceItem, OnionServiceListResponse
 from app.schemas.service import ServiceActionResponse, ServiceStatusResponse
 
@@ -23,7 +24,7 @@ class TunatorService:
         self.repository = repository
         self.environment = self.detector.detect()
         self.config_manager = TorConfigManager(self.environment.torrc_path)
-        self.service_manager = TorServiceManager(self.environment)
+        self.service_manager = TorServiceManager(self.environment, self.detector, self.repository)
         self.log_reader = LogReader(self.environment.log_path)
         self.diagnostics_runner = DiagnosticsRunner(self.environment, self.detector, self.service_manager, self.config_manager)
 
@@ -38,6 +39,12 @@ class TunatorService:
         self.log_reader = LogReader(self.environment.log_path)
         self.diagnostics_runner = DiagnosticsRunner(self.environment, self.detector, self.service_manager, self.config_manager)
 
+    def _ports_from_config(self) -> tuple[int, int]:
+        parsed = self.config_manager.read_parsed()
+        socks = int(parsed.get("SOCKSPort", "9050")) if parsed.get("SOCKSPort", "9050").isdigit() else 9050
+        control = int(parsed.get("ControlPort", "9051")) if parsed.get("ControlPort", "9051").isdigit() else 9051
+        return socks, control
+
     def get_environment(self) -> EnvironmentInfo:
         self._refresh_environment()
         return EnvironmentInfo(**asdict(self.environment))
@@ -45,7 +52,10 @@ class TunatorService:
     def get_status(self) -> ServiceStatusResponse:
         self._refresh_environment()
         status = self.service_manager.status()
-        return ServiceStatusResponse(**asdict(status))
+        latest = self.repository.fetch_latest_diagnostics()
+        data = asdict(status)
+        data["latest_diagnostics"] = latest
+        return ServiceStatusResponse(**data)
 
     def read_config(self) -> ConfigReadResponse:
         self._refresh_environment()
@@ -116,18 +126,59 @@ class TunatorService:
 
     def read_logs(self, limit: int = 200) -> LogResponse:
         self._refresh_environment()
-        return LogResponse(entries=self.log_reader.read_recent(limit=limit))
+        return LogResponse(entries=[LogEntry(**asdict(entry)) for entry in self.log_reader.read_recent(limit=limit)])
 
     def run_diagnostics(self) -> DiagnosticsResponse:
         self._refresh_environment()
-        checks = self.diagnostics_runner.run()
-        payload = [asdict(item) for item in checks]
-        self.repository.record_diagnostics('full', payload)
-        return DiagnosticsResponse(checks=[DiagnosticItem(**item) for item in payload])
+        status = self.service_manager.status()
+        retries = 3 if status.status in {"starting", "restarting"} else 0
+        diag = self.diagnostics_runner.run(source="manual", expected_run_id=status.run_id, retries=retries)
+        payload = [asdict(item) for item in diag.checks]
+        self.repository.record_diagnostics(
+            diagnostic_type='full',
+            result=payload,
+            run_id=diag.run_id,
+            source=diag.source,
+            freshness=diag.freshness,
+            checked_at=diag.checked_at,
+        )
+        return DiagnosticsResponse(
+            run_id=diag.run_id,
+            checked_at=diag.checked_at,
+            source=diag.source,
+            freshness=diag.freshness,
+            checks=[DiagnosticItem(**item) for item in payload],
+        )
+
+    def _invalidate_diagnostics_for_new_run(self, run_id: str | None, source: str) -> None:
+        self.repository.record_diagnostics(
+            diagnostic_type="invalidated",
+            result=[],
+            run_id=run_id,
+            source=source,
+            freshness="pending",
+            checked_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def _run_post_start_diagnostics(self, run_id: str | None) -> None:
+        diag = self.diagnostics_runner.run(source="post-start", expected_run_id=run_id, retries=4)
+        payload = [asdict(item) for item in diag.checks]
+        self.repository.record_diagnostics(
+            diagnostic_type='post-start',
+            result=payload,
+            run_id=diag.run_id,
+            source=diag.source,
+            freshness=diag.freshness,
+            checked_at=diag.checked_at,
+        )
 
     def start_service(self) -> ServiceActionResponse:
         self._refresh_environment()
-        result = self.service_manager.start()
+        socks, control = self._ports_from_config()
+        result = self.service_manager.start(socks_port=socks, control_port=control)
+        self._invalidate_diagnostics_for_new_run(result.run_id, source="start")
+        if result.success:
+            self._run_post_start_diagnostics(result.run_id)
         return ServiceActionResponse(**asdict(result))
 
     def stop_service(self) -> ServiceActionResponse:
@@ -137,5 +188,9 @@ class TunatorService:
 
     def restart_service(self) -> ServiceActionResponse:
         self._refresh_environment()
-        result = self.service_manager.restart()
+        socks, control = self._ports_from_config()
+        result = self.service_manager.restart(socks_port=socks, control_port=control)
+        self._invalidate_diagnostics_for_new_run(result.run_id, source="restart")
+        if result.success:
+            self._run_post_start_diagnostics(result.run_id)
         return ServiceActionResponse(**asdict(result))
