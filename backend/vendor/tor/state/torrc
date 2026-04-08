@@ -1,5 +1,0 @@
-SOCKSPort 9050
-ControlPort 9051
-DataDirectory /mnt/data/fix_fetch_tunator/backend/vendor/tor/state/data
-Log notice file /mnt/data/fix_fetch_tunator/backend/vendor/tor/state/logs/notices.log
-CookieAuthentication 1

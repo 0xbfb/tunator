@@ -12,3 +12,22 @@ node_modules/
 dist/
 .env
 logs/
+
+# Python packaging
+backend/tunator_backend.egg-info/
+
+# Tor baixado/runtime local
+backend/vendor/tor/archives/*.tar.gz
+backend/vendor/tor/runtime/windows-x86_64/
+
+# Tor state local
+backend/vendor/tor/state/onions/
+backend/vendor/tor/state/torrc
+backend/vendor/tor/state/*.bak.*
+backend/vendor/tor/state/data/cached-certs
+backend/vendor/tor/state/data/cached-microdesc-consensus
+backend/vendor/tor/state/data/cached-microdescs
+backend/vendor/tor/state/data/cached-microdescs.new
+backend/vendor/tor/state/data/control_auth_cookie
+backend/vendor/tor/state/data/lock
+backend/vendor/tor/state/data/state
