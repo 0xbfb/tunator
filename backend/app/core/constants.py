@@ -7,6 +7,7 @@ SUPPORTED_TORRC_OPTIONS = {
     "ControlPort",
     "DataDirectory",
     "Log",
+    "ExcludeNodes",
     "HiddenServiceDir",
     "HiddenServicePort",
 }

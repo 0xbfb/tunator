@@ -30,6 +30,7 @@ const configForm = reactive({
   ControlPort: '9051',
   DataDirectory: '',
   Log: '',
+  ExcludeNodes: '',
 })
 const onionForm = reactive({
   name: '',
@@ -78,6 +79,7 @@ async function refreshAll() {
     configForm.ControlPort = cfg.base_options.ControlPort || '9051'
     configForm.DataDirectory = cfg.base_options.DataDirectory || ''
     configForm.Log = cfg.base_options.Log || ''
+    configForm.ExcludeNodes = cfg.base_options.ExcludeNodes || ''
   } catch (err: any) {
     toast.value = err.message || String(err)
   } finally {
@@ -132,6 +134,7 @@ async function saveConfig() {
       ControlPort: configForm.ControlPort,
       DataDirectory: configForm.DataDirectory,
       Log: configForm.Log,
+      ExcludeNodes: configForm.ExcludeNodes,
     }
     const validation = await api<{ valid: boolean; errors: string[]; warnings: string[] }>('/api/config/validate', {
       method: 'POST',
@@ -221,6 +224,7 @@ onMounted(async () => {
         <p><strong>Tor:</strong> {{ status?.running ? 'rodando' : 'parado' }}</p>
         <p><strong>Mensagem:</strong> {{ status?.message || '—' }}</p>
         <p><strong>PID:</strong> {{ status?.pid ?? '—' }}</p>
+        <p><strong>Origem:</strong> {{ status?.source || '—' }}</p>
         <div class="actions">
           <button @click="serviceAction('start')" :disabled="busyAction !== ''">Iniciar</button>
           <button class="secondary" @click="serviceAction('restart')" :disabled="busyAction !== ''">Reiniciar</button>
@@ -245,6 +249,8 @@ onMounted(async () => {
         <label>ControlPort <input v-model="configForm.ControlPort" /></label>
         <label>DataDirectory <input v-model="configForm.DataDirectory" /></label>
         <label>Log <input v-model="configForm.Log" /></label>
+        <label>Blacklist de países (ExcludeNodes) <input v-model="configForm.ExcludeNodes" placeholder="{ru},{cn},{kp}" /></label>
+        <p class="muted tiny">Use códigos ISO em chaves, separados por vírgula. Ex.: <code>{ru},{cn}</code></p>
         <div class="actions">
           <button @click="saveConfig" :disabled="busyAction !== ''">Salvar torrc</button>
           <button class="secondary" @click="serviceAction('restart')" :disabled="busyAction !== ''">Reiniciar Tor</button>
@@ -345,12 +351,12 @@ onMounted(async () => {
 <style scoped>
 :global(body) {
   margin: 0;
-  background: #0f172a;
-  color: #e5e7eb;
+  background: radial-gradient(circle at 20% 10%, #10324d 0%, #071321 35%, #02060d 100%);
+  color: #d9f7ff;
   font-family: Inter, Arial, sans-serif;
 }
 .page {
-  max-width: 1200px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 24px;
 }
@@ -368,11 +374,12 @@ onMounted(async () => {
 .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .card {
-  background: #111827;
-  border: 1px solid #334155;
+  background: linear-gradient(165deg, rgba(8, 22, 38, 0.92), rgba(6, 13, 25, 0.95));
+  border: 1px solid rgba(73, 181, 255, 0.35);
   border-radius: 16px;
   padding: 18px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.2);
+  box-shadow: 0 0 0 1px rgba(46, 197, 255, 0.08), 0 10px 35px rgba(0, 0, 0, 0.45), inset 0 0 35px rgba(26, 107, 168, 0.1);
+  backdrop-filter: blur(3px);
 }
 label {
   display: flex;
@@ -383,26 +390,29 @@ label {
 }
 input, textarea, button {
   border-radius: 12px;
-  border: 1px solid #475569;
-  background: #0b1220;
-  color: #e5e7eb;
+  border: 1px solid rgba(75, 197, 255, 0.35);
+  background: rgba(2, 10, 20, 0.85);
+  color: #d7f6ff;
   padding: 10px 12px;
 }
 button {
   cursor: pointer;
-  background: #2563eb;
+  background: linear-gradient(90deg, #1b9bff, #14d4ff);
+  color: #02111f;
+  font-weight: 700;
   border: none;
 }
-button.secondary { background: #374151; }
-button.danger { background: #b91c1c; }
+button.secondary { background: linear-gradient(90deg, #19334a, #225a80); color: #d9f7ff; }
+button.danger { background: linear-gradient(90deg, #96231f, #d84f2a); color: #fff4eb; }
 button:disabled { opacity: .6; cursor: not-allowed; }
 .toast {
-  background: #1d4ed8;
+  background: linear-gradient(90deg, rgba(24, 74, 120, 0.95), rgba(19, 153, 187, 0.95));
+  border: 1px solid rgba(103, 228, 255, 0.4);
   padding: 12px 14px;
   border-radius: 12px;
 }
 .muted {
-  color: #cbd5e1;
+  color: #9cd8eb;
   margin-top: 0;
 }
 .torrc-preview, .logs {
@@ -421,10 +431,10 @@ button:disabled { opacity: .6; cursor: not-allowed; }
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  border: 1px solid #334155;
+  border: 1px solid rgba(75, 197, 255, 0.25);
   border-radius: 14px;
   padding: 14px;
-  background: #0b1220;
+  background: rgba(2, 10, 20, 0.88);
 }
 .onion-meta { flex: 1; }
 .onion-actions {
@@ -438,11 +448,11 @@ button:disabled { opacity: .6; cursor: not-allowed; }
   padding: 12px;
   border-radius: 12px;
   background: #111827;
-  border: 1px solid #334155;
+  border: 1px solid rgba(75, 197, 255, 0.25);
 }
 .hostname-box.pending {
-  border-color: #92400e;
-  background: rgba(146, 64, 14, 0.18);
+  border-color: #bf6a2e;
+  background: rgba(191, 106, 46, 0.2);
 }
 .badge {
   display: inline-flex;
@@ -453,18 +463,20 @@ button:disabled { opacity: .6; cursor: not-allowed; }
   font-weight: 600;
 }
 .badge.ok {
-  background: rgba(22, 163, 74, 0.18);
-  color: #86efac;
+  background: rgba(18, 165, 144, 0.22);
+  color: #86fff0;
 }
 .badge.warn {
-  background: rgba(217, 119, 6, 0.18);
-  color: #fcd34d;
+  background: rgba(214, 104, 47, 0.24);
+  color: #ffd4a8;
 }
 .compact { justify-content: flex-start; }
 .diagnostics {
   padding-left: 18px;
 }
 pre, code { overflow-wrap: anywhere; }
+h1, h2 { letter-spacing: 0.06em; text-transform: uppercase; }
+.tiny { font-size: 12px; margin-top: -4px; }
 @media (max-width: 900px) {
   .two, .four { grid-template-columns: 1fr; }
   .stack-mobile { grid-template-columns: 1fr; }
