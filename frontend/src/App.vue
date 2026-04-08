@@ -32,6 +32,15 @@ const configForm = reactive({
   Log: '',
   ExcludeNodes: '',
 })
+const countryBlacklistOptions = [
+  { code: 'ru', label: 'Rússia' },
+  { code: 'cn', label: 'China' },
+  { code: 'ir', label: 'Irã' },
+  { code: 'kp', label: 'Coreia do Norte' },
+  { code: 'by', label: 'Belarus' },
+  { code: 'sy', label: 'Síria' },
+] as const
+const selectedCountryBlacklist = ref<string[]>([])
 const onionForm = reactive({
   name: '',
   public_port: 80,
@@ -41,6 +50,28 @@ const onionForm = reactive({
 const onions = ref<OnionItem[]>([])
 
 const pendingOnions = computed(() => onions.value.filter((item) => !item.hostname_ready))
+
+function parseExcludeNodesCountries(value: string): string[] {
+  const matches = value.match(/\{([a-z]{2})\}/gi) || []
+  return Array.from(new Set(matches.map((item) => item.replace(/[{}]/g, '').toLowerCase())))
+}
+
+function syncExcludeNodesFromCountries() {
+  configForm.ExcludeNodes = selectedCountryBlacklist.value.map((code) => `{${code}}`).join(',')
+}
+
+function syncCountriesFromExcludeNodes() {
+  selectedCountryBlacklist.value = parseExcludeNodesCountries(configForm.ExcludeNodes)
+}
+
+function toggleCountryBlacklist(code: string) {
+  if (selectedCountryBlacklist.value.includes(code)) {
+    selectedCountryBlacklist.value = selectedCountryBlacklist.value.filter((item) => item !== code)
+  } else {
+    selectedCountryBlacklist.value = [...selectedCountryBlacklist.value, code].sort()
+  }
+  syncExcludeNodesFromCountries()
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${apiBase}${path}`
@@ -80,6 +111,7 @@ async function refreshAll() {
     configForm.DataDirectory = cfg.base_options.DataDirectory || ''
     configForm.Log = cfg.base_options.Log || ''
     configForm.ExcludeNodes = cfg.base_options.ExcludeNodes || ''
+    selectedCountryBlacklist.value = parseExcludeNodesCountries(configForm.ExcludeNodes)
   } catch (err: any) {
     toast.value = err.message || String(err)
   } finally {
@@ -129,6 +161,7 @@ async function serviceAction(action: 'start' | 'stop' | 'restart') {
 async function saveConfig() {
   busyAction.value = 'save-config'
   try {
+    syncExcludeNodesFromCountries()
     const updates = {
       SOCKSPort: configForm.SOCKSPort,
       ControlPort: configForm.ControlPort,
@@ -249,7 +282,22 @@ onMounted(async () => {
         <label>ControlPort <input v-model="configForm.ControlPort" /></label>
         <label>DataDirectory <input v-model="configForm.DataDirectory" /></label>
         <label>Log <input v-model="configForm.Log" /></label>
-        <label>Blacklist de países (ExcludeNodes) <input v-model="configForm.ExcludeNodes" placeholder="{ru},{cn},{kp}" /></label>
+        <div class="country-blacklist">
+          <span>Blacklist de países</span>
+          <div class="country-chips">
+            <button
+              v-for="option in countryBlacklistOptions"
+              :key="option.code"
+              type="button"
+              class="secondary chip"
+              :class="{ active: selectedCountryBlacklist.includes(option.code) }"
+              @click="toggleCountryBlacklist(option.code)"
+            >
+              {{ option.label }} ({{ option.code.toUpperCase() }})
+            </button>
+          </div>
+        </div>
+        <label>ExcludeNodes (avançado) <input v-model="configForm.ExcludeNodes" placeholder="{ru},{cn},{kp}" @blur="syncCountriesFromExcludeNodes" /></label>
         <p class="muted tiny">Use códigos ISO em chaves, separados por vírgula. Ex.: <code>{ru},{cn}</code></p>
         <div class="actions">
           <button @click="saveConfig" :disabled="busyAction !== ''">Salvar torrc</button>
@@ -473,6 +521,26 @@ button:disabled { opacity: .6; cursor: not-allowed; }
 .compact { justify-content: flex-start; }
 .diagnostics {
   padding-left: 18px;
+}
+.country-blacklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.country-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+button.chip {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+button.chip.active {
+  background: linear-gradient(90deg, #1b9bff, #14d4ff);
+  color: #02111f;
 }
 pre, code { overflow-wrap: anywhere; }
 h1, h2 { letter-spacing: 0.06em; text-transform: uppercase; }
