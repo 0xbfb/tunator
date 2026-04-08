@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import signal
@@ -10,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 
 from app.core.constants import LOCAL_TOR_STATE_DIR
 from app.core.detection.environment_detector import EnvironmentDetectionResult, EnvironmentDetector
@@ -53,6 +53,8 @@ class ServiceStatusResult:
 
 
 class TorServiceManager:
+    _process_lock = Lock()
+
     def __init__(self, env: EnvironmentDetectionResult, detector: EnvironmentDetector, repository: DatabaseRepository):
         self.env = env
         self.detector = detector
@@ -121,106 +123,27 @@ class TorServiceManager:
 
     def start(self, socks_port: int, control_port: int) -> ServiceActionResult:
         with self._action_lock("start"):
-            current = self.status()
-            if current.running:
-                return ServiceActionResult(True, "start", "Tor já está em execução.", current.pid, current.run_id, current.status, current.phase)
-
-            if not self.env.tor_binary_path:
-                return self._fail_action("start", "Tor binary não encontrado.")
-            if not self.env.torrc_path:
-                return self._fail_action("start", "torrc não encontrado.")
-
-            run_id = str(uuid.uuid4())
-            started_at = self._now_iso()
-            self._persist_runtime(
-                run_id=run_id,
-                status="starting",
-                phase="awaiting_initialization",
-                pid=None,
-                started_at=started_at,
-                last_seen_at=started_at,
-                last_error=None,
-                socks_port=socks_port,
-                control_port=control_port,
-                managed_by_tunator=1,
-                last_action="start",
-                last_action_message="starting",
-            )
-
-            verify = subprocess.run(
-                [self.env.tor_binary_path, "--verify-config", "-f", self.env.torrc_path],
-                capture_output=True,
-                text=True,
-                check=False,
-                cwd=str(Path(self.env.tor_binary_path).parent),
-            )
-            if verify.returncode != 0:
-                output = (verify.stderr or verify.stdout or "Tor configuration validation failed.").strip()
-                return self._fail_action("start", output, run_id=run_id)
-
-            try:
-                process = subprocess.Popen(
-                    [self.env.tor_binary_path, "-f", self.env.torrc_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    text=True,
-                    cwd=str(Path(self.env.tor_binary_path).parent),
-                )
-            except OSError as exc:
-                return self._fail_action("start", f"Falha ao iniciar Tor: {exc}", run_id=run_id)
-
-            self._write_pid_file(process.pid)
-            self._write_state_file({"run_id": run_id, "pid": process.pid, "action": "start", "started_at": started_at})
-            self._persist_runtime(pid=process.pid, phase="bootstrap_in_progress", last_seen_at=self._now_iso())
-
-            boot_ok = self._wait_for_bootstrap(process.pid, socks_port, control_port, timeout=20)
-            if not boot_ok:
-                self._persist_runtime(status="starting", phase="bootstrap_in_progress", last_error="Bootstrap ainda em andamento")
-                self.repository.record_service_event(run_id, "start", "starting", "bootstrap_in_progress", process.pid, "Processo iniciou, aguardando bootstrap")
-                return ServiceActionResult(True, "start", "Processo Tor iniciou; bootstrap em andamento.", process.pid, run_id, "starting", "bootstrap_in_progress")
-
-            self._persist_runtime(status="running", phase="ready", last_error=None, last_seen_at=self._now_iso())
-            self.repository.record_service_event(run_id, "start", "running", "ready", process.pid, "Tor pronto para uso")
-            return ServiceActionResult(True, "start", "Tor iniciado com sucesso.", process.pid, run_id, "running", "ready")
+            return self._start_without_lock(socks_port=socks_port, control_port=control_port)
 
     def stop(self) -> ServiceActionResult:
         with self._action_lock("stop"):
             runtime = self.repository.fetch_runtime()
             pid = runtime.get("pid") or self._read_pid_file()
             run_id = runtime.get("run_id")
-            self._persist_runtime(status="stopping", phase="stopping", last_seen_at=self._now_iso(), last_action="stop")
-
-            if pid and self._pid_exists(pid):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    deadline = time.time() + 8
-                    while time.time() < deadline and self._pid_exists(pid):
-                        time.sleep(0.25)
-                    if self._pid_exists(pid):
-                        os.kill(pid, signal.SIGKILL)
-                except OSError as exc:
-                    return self._fail_action("stop", f"Erro ao parar processo: {exc}", run_id=run_id)
-
-            self._cleanup_state_files()
-            self._persist_runtime(
-                status="stopped",
-                phase="idle",
-                pid=None,
-                managed_by_tunator=0,
-                last_seen_at=self._now_iso(),
-                last_error=None,
-                last_action_message="stopped",
-            )
-            self.repository.record_service_event(run_id, "stop", "stopped", "idle", None, "Tor parado")
-            return ServiceActionResult(True, "stop", "Tor parado.", None, run_id, "stopped", "idle")
+            return self._stop_without_lock(pid=pid, run_id=run_id)
 
     def restart(self, socks_port: int, control_port: int) -> ServiceActionResult:
         with self._action_lock("restart"):
+            runtime = self.repository.fetch_runtime()
+            pid = runtime.get("pid") or self._read_pid_file()
+            run_id = runtime.get("run_id")
             self._persist_runtime(status="restarting", phase="stopping", last_seen_at=self._now_iso(), last_action="restart")
-            stop_result = self.stop()
+
+            stop_result = self._stop_without_lock(pid=pid, run_id=run_id)
             if not stop_result.success:
                 return ServiceActionResult(False, "restart", stop_result.message, stop_result.pid, stop_result.run_id, stop_result.status, stop_result.phase)
-            start_result = self.start(socks_port=socks_port, control_port=control_port)
+
+            start_result = self._start_without_lock(socks_port=socks_port, control_port=control_port)
             start_result.action = "restart"
             return start_result
 
@@ -261,22 +184,110 @@ class TorServiceManager:
                 self.fd = None
 
             def __enter__(self):
+                lock_acquired = self.outer._process_lock.acquire(blocking=False)
+                if not lock_acquired:
+                    raise RuntimeError("Outra ação de serviço já está em andamento")
                 self.lock_path.parent.mkdir(parents=True, exist_ok=True)
                 self.fd = open(self.lock_path, "w", encoding="utf-8")
-                try:
-                    fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    raise RuntimeError("Outra ação de serviço já está em andamento")
                 self.fd.write(self.action_name)
                 self.fd.flush()
                 return self
 
             def __exit__(self, exc_type, exc, tb):
                 if self.fd:
-                    fcntl.flock(self.fd.fileno(), fcntl.LOCK_UN)
                     self.fd.close()
+                self.outer._process_lock.release()
 
         return _Lock(self, self.action_lock_path, action)
+
+    def _start_without_lock(self, socks_port: int, control_port: int) -> ServiceActionResult:
+        current = self.status()
+        if current.running:
+            return ServiceActionResult(True, "start", "Tor já está em execução.", current.pid, current.run_id, current.status, current.phase)
+
+        if not self.env.tor_binary_path:
+            return self._fail_action("start", "Tor binary não encontrado.")
+        if not self.env.torrc_path:
+            return self._fail_action("start", "torrc não encontrado.")
+
+        run_id = str(uuid.uuid4())
+        started_at = self._now_iso()
+        self._persist_runtime(
+            run_id=run_id,
+            status="starting",
+            phase="awaiting_initialization",
+            pid=None,
+            started_at=started_at,
+            last_seen_at=started_at,
+            last_error=None,
+            socks_port=socks_port,
+            control_port=control_port,
+            managed_by_tunator=1,
+            last_action="start",
+            last_action_message="starting",
+        )
+
+        verify = subprocess.run(
+            [self.env.tor_binary_path, "--verify-config", "-f", self.env.torrc_path],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(Path(self.env.tor_binary_path).parent),
+        )
+        if verify.returncode != 0:
+            output = (verify.stderr or verify.stdout or "Tor configuration validation failed.").strip()
+            return self._fail_action("start", output, run_id=run_id)
+
+        try:
+            process = subprocess.Popen(
+                [self.env.tor_binary_path, "-f", self.env.torrc_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                cwd=str(Path(self.env.tor_binary_path).parent),
+            )
+        except OSError as exc:
+            return self._fail_action("start", f"Falha ao iniciar Tor: {exc}", run_id=run_id)
+
+        self._write_pid_file(process.pid)
+        self._write_state_file({"run_id": run_id, "pid": process.pid, "action": "start", "started_at": started_at})
+        self._persist_runtime(pid=process.pid, phase="bootstrap_in_progress", last_seen_at=self._now_iso())
+
+        boot_ok = self._wait_for_bootstrap(process.pid, socks_port, control_port, timeout=20)
+        if not boot_ok:
+            self._persist_runtime(status="starting", phase="bootstrap_in_progress", last_error="Bootstrap ainda em andamento")
+            self.repository.record_service_event(run_id, "start", "starting", "bootstrap_in_progress", process.pid, "Processo iniciou, aguardando bootstrap")
+            return ServiceActionResult(True, "start", "Processo Tor iniciou; bootstrap em andamento.", process.pid, run_id, "starting", "bootstrap_in_progress")
+
+        self._persist_runtime(status="running", phase="ready", last_error=None, last_seen_at=self._now_iso())
+        self.repository.record_service_event(run_id, "start", "running", "ready", process.pid, "Tor pronto para uso")
+        return ServiceActionResult(True, "start", "Tor iniciado com sucesso.", process.pid, run_id, "running", "ready")
+
+    def _stop_without_lock(self, pid: int | None, run_id: str | None) -> ServiceActionResult:
+        self._persist_runtime(status="stopping", phase="stopping", last_seen_at=self._now_iso(), last_action="stop")
+        if pid and self._pid_exists(pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                deadline = time.time() + 8
+                while time.time() < deadline and self._pid_exists(pid):
+                    time.sleep(0.25)
+                if self._pid_exists(pid):
+                    os.kill(pid, signal.SIGKILL)
+            except OSError as exc:
+                return self._fail_action("stop", f"Erro ao parar processo: {exc}", run_id=run_id)
+
+        self._cleanup_state_files()
+        self._persist_runtime(
+            status="stopped",
+            phase="idle",
+            pid=None,
+            managed_by_tunator=0,
+            last_seen_at=self._now_iso(),
+            last_error=None,
+            last_action_message="stopped",
+        )
+        self.repository.record_service_event(run_id, "stop", "stopped", "idle", None, "Tor parado")
+        return ServiceActionResult(True, "stop", "Tor parado.", None, run_id, "stopped", "idle")
 
     def _pid_exists(self, pid: int | None) -> bool:
         if pid is None:

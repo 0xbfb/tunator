@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from app.schemas.config import (
     BackupListResponse,
@@ -106,7 +106,11 @@ def create_onion(payload: OnionServiceCreateRequest, service: TunatorService = D
 
 
 @router.delete('/api/onions/{name}', response_model=OnionServiceDeleteResponse)
-def delete_onion(name: str, payload: OnionDeleteRequest = OnionDeleteRequest(), service: TunatorService = Depends(get_tunator_service)) -> OnionServiceDeleteResponse:
+def delete_onion(
+    name: str,
+    payload: OnionDeleteRequest = Body(default_factory=OnionDeleteRequest),
+    service: TunatorService = Depends(get_tunator_service),
+) -> OnionServiceDeleteResponse:
     try:
         return service.delete_onion_service(name, remove_directory=payload.remove_directory)
     except ValueError as exc:
