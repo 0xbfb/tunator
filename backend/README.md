@@ -66,7 +66,7 @@ Os scripts fazem:
 cd backend
 # Windows: .\.venv\Scripts\Activate.ps1
 # Linux/macOS: source .venv/bin/activate
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --reload-exclude "vendor/tor/state/*" --reload-exclude "tunator.db"
 ```
 
 Com a API no ar:
@@ -159,6 +159,9 @@ API disponível em `http://127.0.0.1:8000`.
 
 ## Troubleshooting rápido
 
+- **Servidor "cai" ao iniciar o Tor em modo `--reload`**:
+  - Isso normalmente não é crash do FastAPI: o *reloader* detecta alterações em `backend/vendor/tor/state` (logs/data do Tor) e reinicia o processo.
+  - Rode sem reload (`uvicorn app.main:app`) ou use `--reload-exclude "vendor/tor/state/*"` e `--reload-exclude "tunator.db"`.
 - **Tor não inicia**: rode novamente o bootstrap (`bootstrap_backend.ps1` / `bootstrap_backend.sh`).
 - **Porta em uso**: ajuste `SOCKSPort`/`ControlPort` no `torrc` pela interface.
 - **`.onion` não aparece**: confira permissões de escrita em `backend/vendor/tor/state/onions`.
