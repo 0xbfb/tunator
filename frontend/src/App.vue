@@ -12,6 +12,8 @@ type OnionItem = {
   hostname?: string | null
   hostname_path?: string | null
   hostname_ready?: boolean
+  auth_enabled?: boolean
+  auth_client_name?: string | null
 }
 type ConfigResponse = { raw: string; base_options: Record<string, string>; onion_services: OnionItem[] }
 type DiagnosticItem = { name: string; ok: boolean; details: string }
@@ -37,6 +39,7 @@ const onionForm = reactive({
   public_port: 80,
   target_host: '127.0.0.1',
   target_port: 3000,
+  access_password: '',
 })
 const onions = ref<OnionItem[]>([])
 
@@ -166,6 +169,7 @@ async function createOnion() {
     })
     toast.value = result.warnings?.length ? result.warnings.join('; ') : `Onion ${result.item.name} criado.`
     onionForm.name = ''
+    onionForm.access_password = ''
     await refreshAll()
   } catch (err: any) {
     toast.value = err.message || String(err)
@@ -292,6 +296,7 @@ onMounted(async () => {
         <label>Porta pública <input v-model.number="onionForm.public_port" type="number" min="1" max="65535" /></label>
         <label>Host interno <input v-model="onionForm.target_host" placeholder="127.0.0.1" /></label>
         <label>Porta interna <input v-model.number="onionForm.target_port" type="number" min="1" max="65535" /></label>
+        <label>Senha de acesso (opcional) <input v-model="onionForm.access_password" type="password" placeholder="mínimo 6 caracteres" /></label>
       </div>
 
       <div class="actions">
@@ -310,6 +315,7 @@ onMounted(async () => {
             </div>
             <p><code>{{ item.directory }}</code></p>
             <p>Publica {{ item.public_port }} → {{ item.target_host }}:{{ item.target_port }}</p>
+            <p v-if="item.auth_enabled"><strong>Acesso:</strong> protegido por senha (cliente: <code>{{ item.auth_client_name }}</code>)</p>
 
             <div v-if="item.hostname_ready && item.hostname" class="hostname-box">
               <p><strong>Hostname:</strong></p>

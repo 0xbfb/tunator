@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from hashlib import sha1
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ class OnionService:
     hostname: str | None = None
     hostname_path: str | None = None
     hostname_ready: bool = False
+    auth_enabled: bool = False
+    auth_client_name: str | None = None
 
 
 class TorConfigManager:
@@ -95,6 +98,14 @@ class TorConfigManager:
                             current_onion.target_port = int(port)
                 continue
 
+            if key == "HiddenServiceAuthorizeClient" and current_onion is not None:
+                auth_match = re.match(r"^(basic|stealth)\s+(.+)$", value)
+                if auth_match:
+                    clients = [item.strip() for item in auth_match.group(2).split(",") if item.strip()]
+                    current_onion.auth_enabled = bool(clients)
+                    current_onion.auth_client_name = clients[0] if clients else None
+                continue
+
             if key not in {"HiddenServiceDir", "HiddenServicePort"}:
                 base_options[key] = value
 
@@ -145,7 +156,14 @@ class TorConfigManager:
 
         return ConfigValidationResult(valid=not errors, errors=errors, warnings=warnings)
 
-    def validate_onion_service(self, name: str, public_port: int, target_host: str, target_port: int) -> ConfigValidationResult:
+    def validate_onion_service(
+        self,
+        name: str,
+        public_port: int,
+        target_host: str,
+        target_port: int,
+        access_password: str | None = None,
+    ) -> ConfigValidationResult:
         errors: list[str] = []
         warnings: list[str] = []
         safe_name = self._sanitize_onion_name(name)
@@ -161,6 +179,9 @@ class TorConfigManager:
         existing_names = {str(item["name"]) for item in self.list_onion_services()}
         if safe_name in existing_names:
             errors.append(f"An onion service named {safe_name} already exists")
+        normalized_password = (access_password or "").strip()
+        if normalized_password and len(normalized_password) < 6:
+            errors.append("Password must have at least 6 characters")
         return ConfigValidationResult(valid=not errors, errors=errors, warnings=warnings)
 
     def create_backup(self) -> str | None:
@@ -190,12 +211,21 @@ class TorConfigManager:
         self._write_model(base_options, model["onion_services"])
         return self.read_parsed()
 
-    def create_onion_service(self, name: str, public_port: int, target_host: str, target_port: int) -> dict[str, str | int | bool | None]:
-        validation = self.validate_onion_service(name, public_port, target_host, target_port)
+    def create_onion_service(
+        self,
+        name: str,
+        public_port: int,
+        target_host: str,
+        target_port: int,
+        access_password: str | None = None,
+    ) -> dict[str, str | int | bool | None]:
+        validation = self.validate_onion_service(name, public_port, target_host, target_port, access_password)
         if not validation.valid:
             raise ValueError("; ".join(validation.errors))
 
         safe_name = self._sanitize_onion_name(name)
+        normalized_password = (access_password or "").strip()
+        auth_client_name = self._build_auth_client_name(safe_name, normalized_password) if normalized_password else None
         onions_root = self._ensure_onions_root()
         service_dir = onions_root / safe_name
         service_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +240,8 @@ class TorConfigManager:
             "hostname": None,
             "hostname_path": str(service_dir / "hostname"),
             "hostname_ready": False,
+            "auth_enabled": bool(auth_client_name),
+            "auth_client_name": auth_client_name,
         }
         onion_services = list(model["onion_services"])
         onion_services.append(onion)
@@ -243,6 +275,8 @@ class TorConfigManager:
             for item in onion_services:
                 lines.append(f"HiddenServiceDir {item['directory']}")
                 lines.append(f"HiddenServicePort {item['public_port']} {item['target_host']}:{item['target_port']}")
+                if item.get("auth_enabled") and item.get("auth_client_name"):
+                    lines.append(f"HiddenServiceAuthorizeClient basic {item['auth_client_name']}")
                 lines.append("")
         Path(self.torrc_path).write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
@@ -254,6 +288,10 @@ class TorConfigManager:
     def _sanitize_onion_name(self, name: str) -> str:
         safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", name.strip()).strip("-._")
         return safe.lower()
+
+    def _build_auth_client_name(self, safe_name: str, password: str) -> str:
+        digest = sha1(password.encode("utf-8")).hexdigest()[:10]
+        return f"{safe_name}-{digest}"
 
     def _read_hostname(self, directory: str) -> tuple[str | None, str | None, bool]:
         service_dir = Path(directory)
@@ -273,4 +311,6 @@ class TorConfigManager:
             "hostname": item.hostname,
             "hostname_path": item.hostname_path,
             "hostname_ready": item.hostname_ready,
+            "auth_enabled": item.auth_enabled,
+            "auth_client_name": item.auth_client_name,
         }

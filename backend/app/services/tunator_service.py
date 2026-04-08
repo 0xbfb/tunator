@@ -87,13 +87,20 @@ class TunatorService:
         items = [OnionServiceItem(**item) for item in self.config_manager.list_onion_services()]
         return OnionServiceListResponse(items=items)
 
-    def create_onion_service(self, name: str, public_port: int, target_host: str, target_port: int) -> OnionServiceCreateResponse:
+    def create_onion_service(
+        self,
+        name: str,
+        public_port: int,
+        target_host: str,
+        target_port: int,
+        access_password: str | None = None,
+    ) -> OnionServiceCreateResponse:
         self._refresh_environment()
-        validation = self.config_manager.validate_onion_service(name, public_port, target_host, target_port)
+        validation = self.config_manager.validate_onion_service(name, public_port, target_host, target_port, access_password)
         if not validation.valid:
             raise ValueError('; '.join(validation.errors))
         backup_path = self.config_manager.create_backup()
-        item = self.config_manager.create_onion_service(name, public_port, target_host, target_port)
+        item = self.config_manager.create_onion_service(name, public_port, target_host, target_port, access_password)
         return OnionServiceCreateResponse(
             success=True,
             item=OnionServiceItem(**item),
