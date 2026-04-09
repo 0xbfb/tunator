@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.constants import LOCAL_TOR_ONIONS_DIR, SUPPORTED_TORRC_OPTIONS
@@ -172,7 +172,7 @@ class TorConfigManager:
                 "name": item.name,
                 "path": str(item),
                 "size_bytes": item.stat().st_size,
-                "created_at": datetime.fromtimestamp(item.stat().st_mtime, UTC).isoformat(),
+                "created_at": datetime.fromtimestamp(item.stat().st_mtime, timezone.utc).isoformat(),
             }
             for item in backups
         ]
@@ -183,7 +183,7 @@ class TorConfigManager:
         path = Path(self.torrc_path)
         if not path.exists():
             return None
-        backup_path = path.with_name(f"{path.name}.bak.{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}")
+        backup_path = path.with_name(f"{path.name}.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
         shutil.copy2(path, backup_path)
         return str(backup_path)
 

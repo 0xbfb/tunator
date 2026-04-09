@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import create_app
+from app.services.tunator_service import TunatorService
 
 
 @pytest.fixture()
@@ -34,6 +33,5 @@ def temp_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Pat
 
 
 @pytest.fixture()
-def client(temp_paths: dict[str, Path]) -> TestClient:
-    app = create_app()
-    return TestClient(app)
+def service(temp_paths: dict[str, Path]) -> TunatorService:
+    return TunatorService.bootstrap()
